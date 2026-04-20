@@ -61,26 +61,44 @@ def _inject_tool_discipline(messages: list[dict]) -> None:
         messages.insert(0, {"role": "system", "content": _TOOL_DISCIPLINE_ADDENDUM.strip()})
 
 
-def _flatten_system(system: Any) -> str | None:
-    """Anthropic `system` may be a string OR a list of text blocks.
+def _flatten_system(system: Any, spec: ModelSpec) -> str | list[dict] | None:
+    """Anthropic `system` may be a string OR a list of blocks.
 
-    We concatenate text blocks (dropping `cache_control` — NIM has no equivalent).
+    If the model supports vision and the system prompt is a list containing
+    images, we preserve them as a multimodal list. Otherwise, we flatten to text.
     """
     if system is None:
         return None
     if isinstance(system, str):
         return system or None
-    parts: list[str] = []
+
+    has_images = any(isinstance(b, dict) and b.get("type") == "image" for b in system)
+
+    if has_images and spec.supports_vision:
+        # Preserve as multimodal blocks
+        parts: list[dict] = []
+        for b in system:
+            if not isinstance(b, dict):
+                continue
+            btype = b.get("type")
+            if btype == "text":
+                parts.append({"type": "text", "text": b.get("text", "")})
+            elif btype == "image":
+                parts.append(anthropic_image_to_openai(b))
+        return parts if parts else None
+
+    # Fallback to flattening everything to text
+    txt_parts: list[str] = []
     for b in system:
         if isinstance(b, dict) and b.get("type") == "text":
             txt = b.get("text")
             if txt:
-                parts.append(txt)
-    return "\n\n".join(parts) if parts else None
+                txt_parts.append(txt)
+    return "\n\n".join(txt_parts) if txt_parts else None
 
 
 def _anthropic_message_to_openai(
-    msg: dict, tool_id_map: ToolIdMap
+    msg: dict, tool_id_map: ToolIdMap, spec: ModelSpec
 ) -> list[dict]:
     """One Anthropic message may explode into multiple OpenAI messages because
     `tool_result` blocks become separate `role:"tool"` messages."""
@@ -122,7 +140,20 @@ def _anthropic_message_to_openai(
             tid = block["tool_use_id"]
             openai_id = tool_id_map.anthropic_to_openai(tid)
             raw = block.get("content", "")
-            if isinstance(raw, list):
+
+            # Vision passthrough for tool results
+            if isinstance(raw, list) and spec.supports_vision:
+                content_blocks: list[dict] = []
+                for sub in raw:
+                    if not isinstance(sub, dict):
+                        continue
+                    stype = sub.get("type")
+                    if stype == "text":
+                        content_blocks.append({"type": "text", "text": sub.get("text", "")})
+                    elif stype == "image":
+                        content_blocks.append(anthropic_image_to_openai(sub))
+                raw = content_blocks
+            elif isinstance(raw, list):
                 # Flatten multi-block tool_result content to text.
                 # OpenAI role:"tool" doesn't accept multimodal content, so image
                 # blocks are converted to a text placeholder preserving intent.
@@ -143,11 +174,12 @@ def _anthropic_message_to_openai(
                         else:
                             flat.append("[image]")
                 raw = "\n".join(flat)
+
             tool_result_messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": openai_id,
-                    "content": raw if isinstance(raw, str) else str(raw),
+                    "content": raw,
                 }
             )
         elif btype == "document":
@@ -187,24 +219,22 @@ def translate_request(
     tool_id_map: ToolIdMap,
 ) -> dict:
     openai_messages: list[dict] = []
-    system_str = _flatten_system(anthropic_body.get("system"))
-    if system_str:
-        openai_messages.append({"role": "system", "content": system_str})
+    system_content = _flatten_system(anthropic_body.get("system"), spec)
+    if system_content:
+        openai_messages.append({"role": "system", "content": system_content})
     for m in anthropic_body.get("messages") or []:
-        openai_messages.extend(_anthropic_message_to_openai(m, tool_id_map))
+        openai_messages.extend(_anthropic_message_to_openai(m, tool_id_map, spec))
 
     # Prior-turn reasoning cleanup (only affects assistant text already in history).
     openai_messages = strip_prior_thinking_from_history(openai_messages)
 
     # High-tool-count injection: guide the model to use tools precisely.
-    # Nemotron tends to hallucinate tool names or call meta-tools (Skill, TaskCreate)
-    # with wrong parameters when presented with >50 tools simultaneously.
     if len(anthropic_body.get("tools") or []) > 50:
         _inject_tool_discipline(openai_messages)
 
     # Reasoning toggle (Nemotron v1 / v1.5 / Nemotron 3 family).
-    thinking_requested = anthropic_body.get("thinking") is not None
-    openai_messages = inject_reasoning_toggle(openai_messages, spec, thinking_requested)
+    thinking = anthropic_body.get("thinking")
+    openai_messages = inject_reasoning_toggle(openai_messages, spec, thinking)
 
     requested_max = int(anthropic_body.get("max_tokens") or spec.max_output)
 
@@ -279,6 +309,5 @@ def translate_request(
 
     # Qwen3-style thinking kwarg (bypasses system-msg toggle).
     if spec.reasoning_style == "qwen-kwargs":
-        payload["chat_template_kwargs"] = {"enable_thinking": thinking_requested}
-
+        payload["chat_template_kwargs"] = {"enable_thinking": thinking is not None and thinking is not False}
     return payload

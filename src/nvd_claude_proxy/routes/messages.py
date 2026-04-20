@@ -167,7 +167,7 @@ async def messages(request: Request):
                 if attempt_idx < len(spec_chain) - 1:
                     continue
                 raise exc from None
-            if resp.status_code >= 500 and attempt_idx < len(spec_chain) - 1:
+            if (resp.status_code >= 500 or resp.status_code == 429) and attempt_idx < len(spec_chain) - 1:
                 continue
             break
         elapsed = time.monotonic() - t0
@@ -258,14 +258,14 @@ async def messages(request: Request):
                         yield encode_sse("ping", {"type": "ping"})
                         first_item = await upstream_queue.get()
 
-                    # 5xx before first chunk → try next spec if available.
+                    # Failover status (5xx or 429) before first chunk → try next spec if available.
                     if isinstance(first_item, tuple) and first_item[0] == "__error__":
                         exc = first_item[1]
-                        is_5xx = (
+                        is_failover_status = (
                             isinstance(exc, httpx.HTTPStatusError)
-                            and exc.response.status_code >= 500
+                            and (exc.response.status_code >= 500 or exc.response.status_code == 429)
                         )
-                        if is_5xx and attempt_idx < len(spec_chain) - 1:
+                        if is_failover_status and attempt_idx < len(spec_chain) - 1:
                             try:
                                 await asyncio.wait_for(upstream_queue.get(), timeout=5.0)
                             except asyncio.TimeoutError:

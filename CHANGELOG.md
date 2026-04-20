@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.3.4] — 2026-04-20
+
+### Fixed
+- **Hallucinated tool blocking** — the proxy now detects and blocks known hallucinated tools (`Skill`, `Read`, `migrate`, `status`) that the model may fabricate from training data mismatch with the actual Claude Code tool registry. Previously these caused infinite loops of fake tool calls. Blocked tools emit a text warning instead of being forwarded.
+- **Infinite tool-loop detection** — added repetition tracking: if the same tool pattern repeats 3+ times in the last 5 calls, the proxy forces stream termination with `stop_reason: refusal` and an error message, preventing token waste on stuck loops.
+
+---
+
 ## [0.3.0] — 2026-04-20
 
 ### Fixed

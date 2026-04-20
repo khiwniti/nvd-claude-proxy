@@ -70,9 +70,9 @@ def _extract_tool_args(raw: str) -> dict:
                         except json.JSONDecodeError:
                             break
         break
-    # All strategies failed — return empty dict so Claude Code gets a valid
-    # (if incomplete) tool call rather than an unknown-property error.
-    return {}
+    # All strategies failed — return _raw_arguments so Claude Code gets the
+    # unparseable string rather than an empty dict.
+    return {"_raw_arguments": raw}
 
 _FINISH_TO_STOP: dict[str | None, str] = {
     "stop": "end_turn",

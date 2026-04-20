@@ -13,7 +13,7 @@ aliases:
     supports_vision: false
     supports_reasoning: true
     reasoning_style: "detailed-thinking-v1"
-    max_context: 131072
+    max_context: 1000000
     max_output: 32768
     failover_to:
       - "claude-sonnet-4-6"
@@ -25,7 +25,7 @@ aliases:
     supports_vision: false
     supports_reasoning: true
     reasoning_style: "detailed-thinking-v1"
-    max_context: 131072
+    max_context: 1000000
     max_output: 32768
     failover_to:
       - "claude-haiku-4-5"
@@ -36,7 +36,7 @@ aliases:
     supports_vision: false
     supports_reasoning: true
     reasoning_style: "slash-think"
-    max_context: 131072
+    max_context: 1000000
     max_output: 16384
 
   # Vision-capable (Llama 4 Maverick)
@@ -45,7 +45,7 @@ aliases:
     supports_tools: true
     supports_vision: true
     supports_reasoning: false
-    max_context: 131072
+    max_context: 1000000
     max_output: 16384
 
   # Qwen3 with thinking kwargs
@@ -55,7 +55,7 @@ aliases:
     supports_vision: false
     supports_reasoning: true
     reasoning_style: "qwen-kwargs"
-    max_context: 131072
+    max_context: 1000000
     max_output: 16384
 
   # DeepSeek reasoning (tools unreliable)
@@ -66,7 +66,7 @@ aliases:
     supports_reasoning: true
     reasoning_style: "always-on"
     temperature_override: 0.6
-    max_context: 131072
+    max_context: 1000000
     max_output: 16384
 
   # Plain Llama 3.3 (no reasoning)
@@ -76,7 +76,7 @@ aliases:
     supports_vision: false
     supports_reasoning: false
     reasoning_style: "none"
-    max_context: 131072
+    max_context: 1000000
     max_output: 16384
 
 prefix_fallbacks:

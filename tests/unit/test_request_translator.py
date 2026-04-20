@@ -209,10 +209,10 @@ def test_max_tokens_clamps_when_tools_overflow_small_context():
         "max_tokens": 32000,
         "tools": tools,
     }
-    # Force a tight 16k window: 190 × (name+schema+capped-desc) still
-    # dominates, so max_tokens must shrink.
+    # Force a window large enough for the heuristic: 190 tools + desc
+    # ends up being ~20k tokens with the 3.0 chars/token heuristic.
     out = translate_request(
-        body, _spec(max_context=16384, max_output=16384), ToolIdMap()
+        body, _spec(max_context=32768, max_output=32768), ToolIdMap()
     )
     assert out["max_tokens"] < 32000
     assert out["max_tokens"] >= 256
@@ -223,13 +223,15 @@ def test_max_tokens_clamped_against_context_budget():
     under `max_context`. Reproduces the `/init` 400 from NVIDIA."""
     # ~120k chars ≈ ~30k cl100k tokens of input; with a 32k-token context
     # window and 32k requested output, the clamp must kick in.
-    big_text = "hello world " * 10_000
+    # ~360k chars ≈ ~120k tokens. With 131k window and 16k headroom, this MUST clamp.
+    big_text = "hello world " * 30_000
     body = {
         "model": "claude-opus-4-7",
         "messages": [{"role": "user", "content": big_text}],
         "max_tokens": 32000,
     }
-    spec = _spec(max_context=32768, max_output=32768)
+    # Use a 128k window.
+    spec = _spec(max_context=131072, max_output=131072)
     out = translate_request(body, spec, ToolIdMap())
     assert out["max_tokens"] < 32000
     assert out["max_tokens"] >= 256  # _MIN_OUTPUT floor

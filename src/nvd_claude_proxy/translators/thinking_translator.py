@@ -11,7 +11,7 @@ _THINK_RE = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
 def inject_reasoning_toggle(
     openai_messages: list[dict],
     spec: ModelSpec,
-    thinking_requested: bool,
+    thinking: dict | bool | None,
 ) -> list[dict]:
     """Prepend/adjust a system message to toggle reasoning per NVIDIA model.
 
@@ -21,16 +21,31 @@ def inject_reasoning_toggle(
     if not spec.supports_reasoning or spec.reasoning_style in ("none", "always-on"):
         return openai_messages
 
+    is_enabled = thinking is not None and thinking is not False
+    effort = "high"
+    if isinstance(thinking, dict):
+        # Prioritize explicit 'effort' string if present, otherwise look at budget
+        effort = thinking.get("effort") or thinking.get("budget_tokens") or "high"
+
     if spec.reasoning_style == "detailed-thinking-v1":
-        directive = "detailed thinking on" if thinking_requested else "detailed thinking off"
+        # effort mapping: high -> detailed thinking on, max/xhigh or large budget -> extensive thinking on
+        mode = "detailed thinking"
+        is_extensive = False
+        if isinstance(effort, str) and effort.lower() in ("max", "xhigh"):
+            is_extensive = True
+        elif isinstance(effort, (int, float)) and effort >= 8000:
+            is_extensive = True
+        
+        if is_extensive:
+            mode = "extensive thinking"
+        
+        directive = f"{mode} on" if is_enabled else f"{mode} off"
         return [{"role": "system", "content": directive}, *openai_messages]
 
     if spec.reasoning_style == "slash-think":
-        directive = "/think" if thinking_requested else "/no_think"
+        directive = "/think" if is_enabled else "/no_think"
         return [{"role": "system", "content": directive}, *openai_messages]
 
-    # qwen-kwargs is handled via an `extra_body`-style request param in the
-    # request translator; no message injection here.
     return openai_messages
 
 
@@ -45,10 +60,21 @@ def strip_prior_thinking_from_history(openai_messages: list[dict]) -> list[dict]
         if m.get("role") != "assistant":
             out.append(m)
             continue
-        c = m.get("content")
-        if isinstance(c, str):
-            cleaned = _THINK_RE.sub("", c).lstrip()
+
+        content = m.get("content")
+        if isinstance(content, str):
+            cleaned = _THINK_RE.sub("", content).lstrip()
             out.append({**m, "content": cleaned})
+        elif isinstance(content, list):
+            new_content = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    txt = block.get("text", "")
+                    cleaned = _THINK_RE.sub("", txt).lstrip()
+                    new_content.append({**block, "text": cleaned})
+                else:
+                    new_content.append(block)
+            out.append({**m, "content": new_content})
         else:
             out.append(m)
     return out

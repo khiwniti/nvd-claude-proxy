@@ -44,6 +44,10 @@ from .tool_translator import ToolIdMap
 
 _FENCE_RE = re.compile(r"^```[a-z]*\s*", re.MULTILINE)
 
+# Known hallucinated tools from training data mismatch - these do not exist
+# in the real Claude Code tool registry and cause infinite loops if allowed
+_HALLUCINATED_TOOLS: frozenset[str] = frozenset({"Skill", "Read", "migrate", "status"})
+
 
 def _clean_tool_args(raw: str) -> str:
     """Strip markdown fences and leading prose from NIM tool-call arguments.
@@ -117,6 +121,11 @@ class StreamTranslator:
     _finished: bool = False
     _thinking_chars: int = 0      # accumulated reasoning chars for budget tracking
     _thinking_budget_hit: bool = False  # True once budget exhausted
+
+    # Repetition detection for infinite loop prevention
+    _last_tool_names: list[str | None] = field(default_factory=lambda: [None] * 5)
+    _repetition_count: int = 0
+    _MAX_REPETITIONS: int = 3  # Force stop after seeing same tool pattern N times
 
     # ── helpers ───────────────────────────────────────────────────────────
 
@@ -332,6 +341,31 @@ class StreamTranslator:
                 buf.name = nm
             new_args = fn.get("arguments") or ""
 
+            # DEFENSIVE: Detect hallucinated tools that don't exist in registry.
+            # These occur when the model confuses training data with actual tool
+            # schemas, leading to infinite loops with fake "Skill"/"Read" calls.
+            if buf.name in _HALLUCINATED_TOOLS:
+                # Convert hallucinated tool to a text warning and skip processing
+                if self._open_block_type != "text":
+                    yield from self._close_any_open()
+                    yield from self._open_text_block()
+                warning = (
+                    f"\n[PROXY BLOCKED hallucinated tool '{buf.name}' "
+                    f"with args: {new_args or buf.pre_start_buffer}]\n"
+                )
+                yield self._emit(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": self._open_block_index,
+                        "delta": {"type": "text_delta", "text": warning},
+                    },
+                )
+                # Mark as processed to prevent re-emission
+                buf.started = True
+                buf.closed = True
+                continue
+
             # Can we open this block yet?
             if not buf.started and buf.openai_id and buf.name:
                 # Close any currently-open block (including a different tool_use).
@@ -383,6 +417,32 @@ class StreamTranslator:
             elif not buf.started and new_args:
                 # id/name haven't arrived yet — keep buffering.
                 buf.pre_start_buffer += new_args
+
+            # Track tool names for repetition detection
+            if buf.name and buf.started:
+                self._last_tool_names.pop(0)
+                self._last_tool_names.append(buf.name)
+                # Check for repeating pattern (e.g., Skill -> Read -> Skill -> Read)
+                unique_tools = set(self._last_tool_names)
+                if len(unique_tools) <= 2 and self._last_tool_names.count(buf.name) >= 4:
+                    self._repetition_count += 1
+                    if self._repetition_count >= self._MAX_REPETITIONS:
+                        # Force stop the stream - we're in a loop
+                        yield from self._close_any_open()
+                        yield self._emit(
+                            "content_block_delta",
+                            {
+                                "type": "content_block_delta",
+                                "index": self._open_block_index if self._open_block_index is not None else 0,
+                                "delta": {
+                                    "type": "text_delta",
+                                    "text": "\n[PROXY ERROR: Detected infinite tool loop - forcing termination]\n",
+                                },
+                            },
+                        )
+                        self._stop_reason = "refusal"
+                        self._finished = True
+                        return
 
         # 4) Finish reason.
         if finish:

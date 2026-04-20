@@ -22,19 +22,18 @@ def new_request_id() -> str:
 def standard_response_headers(
     request_id: str,
     *,
-    rpm_limit: int = 40,
-    tpm_limit: int = 60_000,
+    rpm_limit: int = 4000,
+    tpm_limit: int = 2_000_000,
 ) -> dict[str, str]:
     """Anthropic-compatible response headers.
 
-    We fabricate the rate-limit headers from `settings` because NVIDIA NIM does
-    not surface per-key counters. The fabricated values are conservative —
-    sized to the Build free tier — so SDK backoff is never *too* aggressive.
+    We fabricate the rate-limit headers. The values are sized to modern NIM
+    quotas (4k RPM) so SDKs don't back off unnecessarily.
     """
     now = int(time.time())
     return {
         # Required by ALL official Anthropic SDKs — TypeScript SDK throws if absent.
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": "2024-01-01",
         "x-anthropic-type": "anthropic-api-response",
         "anthropic-request-id": request_id,
         "request-id": request_id,  # alias some SDKs read
