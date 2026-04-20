@@ -45,6 +45,22 @@ class ContextOverflowError(ValueError):
         )
 
 
+_TOOL_DISCIPLINE_ADDENDUM = """\n\n---\nTool use discipline (IMPORTANT):\n- Only call a tool when you are certain it is the correct tool for the task.\n- When calling the `Skill` tool, use the EXACT skill name shown in the tool description (e.g. \"/vercel:env\", not \"vercel\"). Do not guess skill names.\n- Provide ALL required parameters for every tool call. Check the tool schema before calling.\n- If you are unsure which tool to use, ask the user for clarification instead of guessing.\n- Do not call design or UI tools (e.g. `pencil`) for non-design tasks such as file migration or code editing.\n---"""
+
+
+def _inject_tool_discipline(messages: list[dict]) -> None:
+    """Append tool-discipline guidance to the system message in-place.
+
+    When the tool catalog is large (>50 tools), Nemotron tends to hallucinate
+    tool names and call meta-tools with wrong parameters.  A short addendum in
+    the system turn is the most token-efficient nudge.
+    """
+    if messages and messages[0].get("role") == "system":
+        messages[0]["content"] = (messages[0]["content"] or "") + _TOOL_DISCIPLINE_ADDENDUM
+    else:
+        messages.insert(0, {"role": "system", "content": _TOOL_DISCIPLINE_ADDENDUM.strip()})
+
+
 def _flatten_system(system: Any) -> str | None:
     """Anthropic `system` may be a string OR a list of text blocks.
 
@@ -179,6 +195,12 @@ def translate_request(
 
     # Prior-turn reasoning cleanup (only affects assistant text already in history).
     openai_messages = strip_prior_thinking_from_history(openai_messages)
+
+    # High-tool-count injection: guide the model to use tools precisely.
+    # Nemotron tends to hallucinate tool names or call meta-tools (Skill, TaskCreate)
+    # with wrong parameters when presented with >50 tools simultaneously.
+    if len(anthropic_body.get("tools") or []) > 50:
+        _inject_tool_discipline(openai_messages)
 
     # Reasoning toggle (Nemotron v1 / v1.5 / Nemotron 3 family).
     thinking_requested = anthropic_body.get("thinking") is not None
