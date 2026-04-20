@@ -60,24 +60,19 @@ Pass `--api-key nvapi-…` to any command for a one-shot override without saving
 
 ---
 
-## Quick start — manual
+## Force custom proxy URL
+
+If you have trouble getting your Claude client to honor the `ANTHROPIC_BASE_URL` environment variable, use the provided wrapper script which forces the configuration:
 
 ```sh
-# 1. Get a free API key at https://build.nvidia.com  (no credit card required)
-export NVIDIA_API_KEY=nvapi-...
-
-# 2. Start the proxy (default port 8788)
-nvd-claude-proxy
+# Use this wrapper instead of calling claude directly
+./scripts/launch_claude.sh
 ```
 
-In another shell:
-
+You can add this to your shell profile to make it permanent:
 ```sh
-export ANTHROPIC_BASE_URL=http://localhost:8788
-export ANTHROPIC_API_KEY=not-used          # any non-empty string works
-export ANTHROPIC_MODEL=claude-opus-4-7     # → Nemotron Ultra 253B
-export ANTHROPIC_SMALL_FAST_MODEL=claude-haiku-4-5  # → Nemotron Nano 9B v2
-claude
+# Add to ~/.bashrc or ~/.zshrc
+alias claude='./path/to/nvd-claude-proxy/scripts/launch_claude.sh'
 ```
 
 ---
