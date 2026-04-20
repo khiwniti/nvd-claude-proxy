@@ -31,6 +31,16 @@ _log = structlog.get_logger("nvd_claude_proxy.messages")
 _PING_INTERVAL_SECONDS = 15.0
 
 
+async def heartbeat_producer(upstream_queue: asyncio.Queue) -> AsyncIterator[bytes]:
+    """Periodically emits pings while the upstream is working."""
+    while True:
+        try:
+            # Wait for the queue to be empty/done.
+            # (Note: simpler to just yield ping periodically)
+            await asyncio.sleep(_PING_INTERVAL_SECONDS)
+            yield encode_sse("ping", {"type": "ping"})
+        except asyncio.CancelledError:
+            return
 def _check_proxy_key(request: Request) -> None:
     s = request.app.state.settings
     if not s.proxy_api_key:
