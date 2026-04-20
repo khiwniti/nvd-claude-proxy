@@ -1,5 +1,6 @@
 """Tests for P2/P3 features: failover chain, PDF extraction, budget_tokens,
 disable_parallel_tool_use, stubs, SIGHUP reload."""
+
 from __future__ import annotations
 
 import base64
@@ -19,6 +20,7 @@ from nvd_claude_proxy.util.pdf_extractor import document_block_to_text
 
 
 # ── CapabilityManifest failover_to ──────────────────────────────────────────────────────
+
 
 def _make_registry() -> ModelRegistry:
     big = CapabilityManifest(
@@ -64,7 +66,10 @@ def test_resolve_chain_deduplicates():
         failover_to=["claude-opus-4-7", "claude-haiku-4-5"],
     )
     reg = ModelRegistry(
-        specs={"claude-opus-4-7": spec, "claude-haiku-4-5": CapabilityManifest(alias="claude-haiku-4-5", nvidia_id="x")},
+        specs={
+            "claude-opus-4-7": spec,
+            "claude-haiku-4-5": CapabilityManifest(alias="claude-haiku-4-5", nvidia_id="x"),
+        },
         default_big="claude-opus-4-7",
     )
     chain = reg.resolve_chain("claude-opus-4-7")
@@ -83,6 +88,7 @@ def test_failover_to_unknown_alias_ignored():
 
 
 # ── disable_parallel_tool_use ─────────────────────────────────────────────────
+
 
 def _spec() -> CapabilityManifest:
     return CapabilityManifest(alias="claude-opus-4-7", nvidia_id="nvidia/big", supports_tools=True)
@@ -113,6 +119,7 @@ def test_disable_parallel_tool_use_absent_by_default():
 
 
 # ── PDF document_block_to_text ────────────────────────────────────────────────
+
 
 def test_document_plain_text_source():
     block = {"type": "document", "source": {"type": "text", "data": "Hello PDF"}}
@@ -195,6 +202,7 @@ def test_document_block_wired_into_request_translator():
 
 # ── thinking.budget_tokens ────────────────────────────────────────────────────
 
+
 def _run_stream(chunks: list[dict], budget_tokens: int | None = None) -> list[dict]:
     spec = CapabilityManifest(alias="claude-opus-4-7", nvidia_id="nvidia/big")
     tool_controller = ToolInvocationController(spec, ToolIdMap())
@@ -247,7 +255,7 @@ def test_budget_tokens_truncates_at_limit():
 def test_budget_tokens_stops_further_reasoning():
     """After budget hit, subsequent reasoning chunks are dropped."""
     chunks = [
-        _reasoning_chunk("C" * 40),   # fills budget_tokens=10
+        _reasoning_chunk("C" * 40),  # fills budget_tokens=10
         _reasoning_chunk("D" * 100),  # should be dropped
     ]
     events = _run_stream(chunks, budget_tokens=10)
@@ -262,6 +270,7 @@ def test_budget_tokens_stops_further_reasoning():
 
 
 # ── Batch / Files stubs ───────────────────────────────────────────────────────
+
 
 @pytest.fixture(scope="module")
 def client():
@@ -303,11 +312,12 @@ def test_files_content_returns_501(client):
 
 # ── SIGHUP hot reload ─────────────────────────────────────────────────────────
 
+
 def test_sighup_handler_registered():
     """The SIGHUP signal handler must be the proxy's reload function."""
     if not hasattr(signal, "SIGHUP"):
         pytest.skip("SIGHUP not available on this platform")
-    app = create_app()
+    create_app()
     handler = signal.getsignal(signal.SIGHUP)
     assert callable(handler) and handler is not signal.SIG_DFL
 
@@ -317,7 +327,6 @@ def test_sighup_reload_updates_registry(tmp_path):
     if not hasattr(signal, "SIGHUP"):
         pytest.skip("SIGHUP not available on this platform")
     import yaml
-    from nvd_claude_proxy.config.models import load_model_registry
     from nvd_claude_proxy.app import _install_sighup_handler
     from fastapi import FastAPI
 

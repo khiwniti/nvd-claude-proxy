@@ -8,6 +8,7 @@ Anthropic shapes and schemas/openai.py for NIM wire types.
 The Pydantic ProxyX models are kept for test/validation convenience; the
 lightweight dataclass variants are used on hot paths.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from pydantic import BaseModel, Field
 
 
 # ── Pydantic helpers (for tests / IDE type hints) ─────────────────────────────
+
 
 class ProxyTextBlock(BaseModel):
     type: Literal["text"] = "text"
@@ -70,6 +72,7 @@ class ProxyMessage(BaseModel):
 
 class CanonicalRequest(BaseModel):
     """Full normalised form of an inbound Anthropic Messages request."""
+
     model: str
     messages: list[ProxyMessage]
     system: str | list[dict[str, Any]] | None = None
@@ -88,6 +91,7 @@ class CanonicalRequest(BaseModel):
 
 
 # ── Lightweight dataclasses for hot-path use ──────────────────────────────────
+
 
 @dataclass(slots=True)
 class CanonicalText:
@@ -132,6 +136,7 @@ class CanonicalUsage:
 @dataclass
 class CanonicalResponse:
     """Normalised completed (non-streaming) response."""
+
     id: str
     model: str
     content: list[CanonicalBlock]
@@ -144,5 +149,6 @@ class CanonicalResponse:
 @dataclass(slots=True)
 class SSEEvent:
     """A single server-sent event ready for wire encoding."""
+
     event: str
     data: dict[str, Any]

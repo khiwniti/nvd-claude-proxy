@@ -1,4 +1,5 @@
 """GET /metrics — Prometheus text exposition."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter

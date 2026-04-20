@@ -55,6 +55,8 @@ dev = [
   "respx>=0.22",
   # Optional runtime dep exercised by tool_controller schema validation tests.
   "jsonschema>=4.23",
+  # Type stubs for third-party libraries used by mypy in CI.
+  "types-PyYAML>=6.0",
 ]
 metrics = [
   "prometheus-client>=0.21",
@@ -94,3 +96,7 @@ target-version = "py311"
 python_version = "3.11"
 strict = false
 ignore_missing_imports = true
+# Suppress untyped-library errors for third-party packages that ship stubs
+# as a separate types-* package. CI installs those stubs via dev extras, but
+# keeping this as belt-and-suspenders avoids breakage if stubs fall out of sync.
+disable_error_code = ["import-untyped"]

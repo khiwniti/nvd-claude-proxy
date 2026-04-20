@@ -23,6 +23,7 @@ We convert this into a text block whose text is:
     [Document: <title>]
     <extracted text>
 """
+
 from __future__ import annotations
 
 import base64
@@ -57,7 +58,7 @@ def extract_pdf_text(b64_data: str) -> str:
                 parts.append(text)
         return "\n\n".join(parts) if parts else "[PDF document — no extractable text]"
     except Exception as exc:
-        _log.warning("pdf.extraction_failed", error=str(exc))
+        _log.warning("pdf.extraction_failed", error=str(exc))  # type: ignore[call-arg]
         return f"[PDF document — extraction failed: {exc}]"
 
 

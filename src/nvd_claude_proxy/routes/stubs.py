@@ -17,6 +17,7 @@ Stubs:
 - DELETE /v1/files/{id}
 - GET  /v1/files/{id}/content
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
@@ -50,6 +51,7 @@ def _stub_response(request: Request) -> ORJSONResponse:
 
 # ── Message Batches ────────────────────────────────────────────────────────────
 
+
 @router.post("/v1/messages/batches")
 async def create_batch(request: Request) -> ORJSONResponse:
     return _stub_response(request)
@@ -81,6 +83,7 @@ async def delete_batch(batch_id: str, request: Request) -> ORJSONResponse:
 
 
 # ── Files API ──────────────────────────────────────────────────────────────────
+
 
 @router.post("/v1/files")
 async def upload_file(request: Request) -> ORJSONResponse:

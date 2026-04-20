@@ -70,9 +70,7 @@ def _echo_stop_sequence(anthropic_body: dict, resp: dict) -> None:
     if not seqs or resp.get("stop_reason") != "end_turn":
         return
     full_text = "".join(
-        (b.get("text") or "")
-        for b in (resp.get("content") or [])
-        if b.get("type") == "text"
+        (b.get("text") or "") for b in (resp.get("content") or []) if b.get("type") == "text"
     )
     # Prefer the stop sequence that appears latest (closest to end of output).
     best_pos = -1
@@ -92,9 +90,7 @@ def _echo_stop_sequence(anthropic_body: dict, resp: dict) -> None:
 def _build_tool_schemas(body: dict) -> dict[str, dict]:
     """Build a name→schema map from the raw Anthropic request body for validation."""
     return {
-        t["name"]: t.get("input_schema", {})
-        for t in (body.get("tools") or [])
-        if t.get("name")
+        t["name"]: t.get("input_schema", {}) for t in (body.get("tools") or []) if t.get("name")
     }
 
 
@@ -104,7 +100,6 @@ async def messages(request: Request):
     body = await request.json()
 
     registry = request.app.state.model_registry
-    settings = request.app.state.settings
     requested_model = body.get("model") or registry.default_big
     spec_chain = registry.resolve_chain(requested_model)
     spec = spec_chain[0]
@@ -180,11 +175,14 @@ async def messages(request: Request):
                 if attempt_idx < len(spec_chain) - 1:
                     continue
                 raise exc from None
-            if (resp.status_code >= 500 or resp.status_code == 429) and attempt_idx < len(spec_chain) - 1:
+            if (resp.status_code >= 500 or resp.status_code == 429) and attempt_idx < len(
+                spec_chain
+            ) - 1:
                 continue
             break
         elapsed = time.monotonic() - t0
         observe_duration(requested_model, elapsed)
+        assert resp is not None  # spec_chain always has ≥1 element; loop always assigns resp
         if resp.status_code >= 400:
             try:
                 err_body = resp.json() if resp.content else {}
@@ -230,9 +228,7 @@ async def messages(request: Request):
         """
         thinking_cfg = body.get("thinking") or {}
         budget_tokens = (
-            thinking_cfg.get("budget_tokens")
-            if isinstance(thinking_cfg, dict)
-            else None
+            thinking_cfg.get("budget_tokens") if isinstance(thinking_cfg, dict) else None
         )
         active_tool_id_map = tool_id_map
         active_payload = payload
@@ -281,9 +277,8 @@ async def messages(request: Request):
                     # Failover status (5xx or 429) before first chunk.
                     if isinstance(first_item, tuple) and first_item[0] == "__error__":
                         exc = first_item[1]
-                        is_failover_status = (
-                            isinstance(exc, httpx.HTTPStatusError)
-                            and (exc.response.status_code >= 500 or exc.response.status_code == 429)
+                        is_failover_status = isinstance(exc, httpx.HTTPStatusError) and (
+                            exc.response.status_code >= 500 or exc.response.status_code == 429
                         )
                         if is_failover_status and attempt_idx < len(spec_chain) - 1:
                             try:
@@ -317,7 +312,7 @@ async def messages(request: Request):
                     # Normal path: process first_item then drain the queue.
                     sentinel_seen = first_item is SENTINEL
                     if not sentinel_seen:
-                        for ev in st.feed(first_item):
+                        for ev in st.feed(first_item):  # type: ignore[arg-type]
                             yield encode_sse(ev["event"], ev["data"])
 
                     while not sentinel_seen:

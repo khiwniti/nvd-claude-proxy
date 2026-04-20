@@ -6,9 +6,7 @@ from typing import Literal
 
 import yaml
 
-ReasoningStyle = Literal[
-    "detailed-thinking-v1", "slash-think", "qwen-kwargs", "always-on", "none"
-]
+ReasoningStyle = Literal["detailed-thinking-v1", "slash-think", "qwen-kwargs", "always-on", "none"]
 
 
 @dataclass(slots=True)
@@ -42,14 +40,21 @@ class CapabilityManifest:
     reasoning_style: ReasoningStyle = "none"
 
     def __post_init__(self):
-        # Ensure legacy scalar fields mirror the canonical nested structures so
-        # any code reading spec.supports_reasoning / spec.reasoning_style gets
-        # correct values even if only the nested form was set by the loader.
-        if self.reasoning.style != "none" and not self.supports_reasoning:
+        # Bidirectional sync between legacy scalar fields and canonical nested
+        # structures. Either side may be set by callers, so we normalise both.
+        #
+        # Legacy → new: propagate when nested field still carries its zero-value.
+        if self.reasoning_style != "none" and self.reasoning.style == "none":
+            self.reasoning.style = self.reasoning_style  # type: ignore[assignment]
+        if not self.tools.supports and self.supports_tools is False:
+            pass  # caller explicitly disabled via both; leave as-is
+        elif not self.supports_tools and self.tools.supports:
+            self.tools.supports = False
+        #
+        # New → legacy: guarantee legacy scalars reflect the canonical values.
+        if self.reasoning.style != "none":
             self.supports_reasoning = True
-        if self.reasoning_style == "none" and self.reasoning.style != "none":
-            self.reasoning_style = self.reasoning.style  # type: ignore[assignment]
-        # Sync tools legacy field with nested ToolConfig.
+        self.reasoning_style = self.reasoning.style  # type: ignore[assignment]
         self.supports_tools = self.tools.supports
 
 
@@ -99,6 +104,7 @@ def _bundled_models_path() -> Path:
     """Return the path to the models.yaml bundled inside the package."""
     try:
         from importlib.resources import files  # Python 3.9+
+
         return Path(str(files("nvd_claude_proxy.data").joinpath("models.yaml")))
     except Exception:
         return Path(__file__).parent.parent / "data" / "models.yaml"
@@ -111,6 +117,7 @@ def load_model_registry(path: str | Path | None = None) -> ModelRegistry:
         bundled = _bundled_models_path()
         if resolved is not None and not resolved.exists():
             import warnings
+
             warnings.warn(
                 f"models.yaml not found at '{resolved}'; using bundled default. "
                 "Set MODEL_CONFIG_PATH to override.",

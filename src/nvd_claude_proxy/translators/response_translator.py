@@ -1,4 +1,5 @@
 """Non-streaming OpenAI response → Anthropic Messages response."""
+
 from __future__ import annotations
 
 import json
@@ -74,6 +75,7 @@ def _extract_tool_args(raw: str) -> dict:
     # unparseable string rather than an empty dict.
     return {"_raw_arguments": raw}
 
+
 _FINISH_TO_STOP: dict[str | None, str] = {
     "stop": "end_turn",
     "length": "max_tokens",
@@ -84,9 +86,7 @@ _FINISH_TO_STOP: dict[str | None, str] = {
 }
 
 
-def _extract_thinking(
-    content: str | None, reasoning: str | None
-) -> tuple[str | None, str]:
+def _extract_thinking(content: str | None, reasoning: str | None) -> tuple[str | None, str]:
     """Return `(thinking_text, remaining_content)`.
 
     Accepts both `reasoning_content` and inline `<think>…</think>` since different
@@ -101,9 +101,7 @@ def _extract_thinking(
     return None, content or ""
 
 
-def translate_response(
-    openai_resp: dict, anthropic_model: str, tool_id_map: ToolIdMap
-) -> dict:
+def translate_response(openai_resp: dict, anthropic_model: str, tool_id_map: ToolIdMap) -> dict:
     choices = openai_resp.get("choices") or [{}]
     choice = choices[0]
     msg = choice.get("message") or {}

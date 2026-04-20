@@ -68,9 +68,7 @@ def test_custom_and_function_types_passthrough():
 
 
 def test_tool_name_sanitization():
-    out = anthropic_tools_to_openai(
-        [{"name": "dotted.name.tool", "input_schema": {}}]
-    )
+    out = anthropic_tools_to_openai([{"name": "dotted.name.tool", "input_schema": {}}])
     assert out[0]["function"]["name"] == "dotted_name_tool"
 
 
