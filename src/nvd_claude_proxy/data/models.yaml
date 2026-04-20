@@ -2,8 +2,8 @@
 # and capability flags. Lookup is exact-first, then prefix-match.
 # Fallbacks honor ANTHROPIC_MODEL / ANTHROPIC_SMALL_FAST_MODEL.
 defaults:
-  big: "claude-opus-4-7"
-  small: "claude-haiku-4-5"
+  big: "glm-5-1"
+  small: "glm-5-1"
 
 aliases:
   # Flagship → Nemotron Ultra (best reasoning)
