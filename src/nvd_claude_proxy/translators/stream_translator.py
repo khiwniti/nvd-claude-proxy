@@ -37,8 +37,33 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterator, Literal
 
+import re
+
 from ..util.ids import new_message_id, new_thinking_signature
 from .tool_translator import ToolIdMap
+
+_FENCE_RE = re.compile(r"^```[a-z]*\s*", re.MULTILINE)
+
+
+def _clean_tool_args(raw: str) -> str:
+    """Strip markdown fences and leading prose from NIM tool-call arguments.
+
+    Some NIM model variants wrap JSON in markdown code fences or prefix it with
+    prose like "Here are the parameters:". We normalise to a bare JSON string
+    so that the Anthropic SDK's JSON.parse() succeeds.
+    """
+    s = raw.strip()
+    # Strip ```json\n ... ``` or ``` ... ```
+    if s.startswith("```"):
+        s = _FENCE_RE.sub("", s, count=1).rstrip("`").strip()
+    # Strip leading non-JSON prose up to the first '{' or '['
+    first = min(
+        (s.find("{") if "{" in s else len(s)),
+        (s.find("[") if "[" in s else len(s)),
+    )
+    if first > 0:
+        s = s[first:]
+    return s
 
 BlockType = Literal["text", "thinking", "tool_use"]
 
@@ -61,7 +86,10 @@ class _ToolBuf:
     anth_index: int | None = None
     started: bool = False
     closed: bool = False
-    args_buffer: str = ""  # raw partial-JSON accumulated before start
+    # args received before id+name arrived (flushed into full_args at start)
+    pre_start_buffer: str = ""
+    # ALL argument fragments accumulated post-start; cleaned and emitted at close
+    full_args: str = ""
 
 
 @dataclass
@@ -150,6 +178,24 @@ class StreamTranslator:
             self._open_block_type == "tool_use"
             and self._open_block_index is not None
         ):
+            # Emit all accumulated arguments as a single clean delta before stop.
+            for buf in self._tools_by_openai_idx.values():
+                if buf.anth_index == self._open_block_index and not buf.closed:
+                    if buf.full_args:
+                        clean = _clean_tool_args(buf.full_args)
+                        if clean:
+                            yield self._emit(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": buf.anth_index,
+                                    "delta": {
+                                        "type": "input_json_delta",
+                                        "partial_json": clean,
+                                    },
+                                },
+                            )
+                    break
             yield self._emit(
                 "content_block_stop",
                 {"type": "content_block_stop", "index": self._open_block_index},
@@ -319,21 +365,10 @@ class StreamTranslator:
                         },
                     },
                 )
-                # Flush any arguments buffered pre-start + the new fragment.
-                pending = buf.args_buffer + new_args
-                buf.args_buffer = ""
-                if pending:
-                    yield self._emit(
-                        "content_block_delta",
-                        {
-                            "type": "content_block_delta",
-                            "index": buf.anth_index,
-                            "delta": {
-                                "type": "input_json_delta",
-                                "partial_json": pending,
-                            },
-                        },
-                    )
+                # Flush pre-start buffer + new fragment into full_args.
+                # (All args are emitted as a single clean delta at close time.)
+                buf.full_args = buf.pre_start_buffer + new_args
+                buf.pre_start_buffer = ""
             elif buf.started and new_args:
                 # If a different tool is currently open, switch to this one.
                 if (
@@ -343,20 +378,11 @@ class StreamTranslator:
                     yield from self._close_open_tool_use()
                     self._open_block_type = "tool_use"
                     self._open_block_index = buf.anth_index
-                yield self._emit(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": buf.anth_index,
-                        "delta": {
-                            "type": "input_json_delta",
-                            "partial_json": new_args,
-                        },
-                    },
-                )
+                # Accumulate — do not emit yet; cleaned + emitted at close.
+                buf.full_args += new_args
             elif not buf.started and new_args:
                 # id/name haven't arrived yet — keep buffering.
-                buf.args_buffer += new_args
+                buf.pre_start_buffer += new_args
 
         # 4) Finish reason.
         if finish:

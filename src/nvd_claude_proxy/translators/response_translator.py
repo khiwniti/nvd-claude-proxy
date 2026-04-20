@@ -8,6 +8,71 @@ from ..util.ids import new_message_id, new_thinking_signature
 from .tool_translator import ToolIdMap
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+_FENCE_RE = re.compile(r"^```[a-z]*\s*", re.MULTILINE)
+
+
+def _extract_tool_args(raw: str) -> dict:
+    """Robustly extract a JSON object from a NIM tool-call arguments string.
+
+    NIM model variants sometimes wrap JSON in markdown fences or prefix with
+    prose. We try several cleaning strategies before falling back to an empty
+    dict (which lets Claude Code show the tool call without crashing on
+    schema validation of ``_raw_arguments``).
+    """
+    s = raw.strip()
+    # Strategy 1: direct parse (fast path — well-behaved models).
+    try:
+        result = json.loads(s)
+        return result if isinstance(result, dict) else {"value": result}
+    except json.JSONDecodeError:
+        pass
+    # Strategy 2: strip markdown code fences.
+    if s.startswith("```"):
+        s2 = _FENCE_RE.sub("", s, count=1).rstrip("`").strip()
+        try:
+            result = json.loads(s2)
+            return result if isinstance(result, dict) else {"value": result}
+        except json.JSONDecodeError:
+            s = s2
+    # Strategy 3: strip leading prose up to the first opening brace.
+    brace = s.find("{")
+    if brace > 0:
+        s3 = s[brace:]
+        try:
+            result = json.loads(s3)
+            return result if isinstance(result, dict) else {"value": result}
+        except json.JSONDecodeError:
+            pass
+    # Strategy 4: scan for a balanced {...} block (handles trailing garbage).
+    for start in range(len(s)):
+        if s[start] != "{":
+            continue
+        depth, in_str, esc = 0, False, False
+        for end, ch in enumerate(s[start:], start):
+            if esc:
+                esc = False
+                continue
+            if ch == "\\" and in_str:
+                esc = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+                continue
+            if not in_str:
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            result = json.loads(s[start : end + 1])
+                            return result if isinstance(result, dict) else {"value": result}
+                        except json.JSONDecodeError:
+                            break
+        break
+    # All strategies failed — return empty dict so Claude Code gets a valid
+    # (if incomplete) tool call rather than an unknown-property error.
+    return {}
 
 _FINISH_TO_STOP: dict[str | None, str] = {
     "stop": "end_turn",
@@ -62,10 +127,7 @@ def translate_response(
     for tc in msg.get("tool_calls") or []:
         fn = tc.get("function") or {}
         raw_args = fn.get("arguments") or "{}"
-        try:
-            tool_input = json.loads(raw_args)
-        except json.JSONDecodeError:
-            tool_input = {"_raw_arguments": raw_args}
+        tool_input = _extract_tool_args(raw_args)
         anth_id = tool_id_map.openai_to_anthropic(tc.get("id", ""))
         sanitized_name = fn.get("name", "")
         original_name = tool_id_map.original_tool_name(sanitized_name)
