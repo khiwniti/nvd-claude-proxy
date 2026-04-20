@@ -12,32 +12,54 @@ ReasoningStyle = Literal[
 
 
 @dataclass(slots=True)
-class ModelSpec:
+class ReasoningConfig:
+    style: ReasoningStyle = "none"
+    adaptive: bool = False
+    effort_mapping: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ToolConfig:
+    supports: bool = True
+    parallel: bool = True
+    arg_validation: bool = True
+
+
+@dataclass(slots=True)
+class CapabilityManifest:
     alias: str
     nvidia_id: str
-    supports_tools: bool = True
     supports_vision: bool = False
-    supports_reasoning: bool = False
-    reasoning_style: ReasoningStyle = "none"
-    max_context: int = 131072
+    reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
+    tools: ToolConfig = field(default_factory=ToolConfig)
+    max_context: int = 1000000
     max_output: int = 16384
     temperature_override: float | None = None
-    # Ordered list of alias names to try if this model returns 5xx.
-    # Example: failover_to: ["claude-sonnet-4-6", "claude-haiku-4-5"]
     failover_to: list[str] = field(default_factory=list)
+    # Legacy support
+    supports_tools: bool = True
+    supports_reasoning: bool = False
+    reasoning_style: ReasoningStyle = "none"
+
+    def __post_init__(self):
+        # Migrate legacy kwargs to nested structures if not explicitly set
+        if not self.tools.supports and self.supports_tools:
+            self.tools.supports = self.supports_tools
+        if self.reasoning.style == "none" and self.supports_reasoning:
+            self.reasoning.style = self.reasoning_style
 
 
 @dataclass(slots=True)
 class ModelRegistry:
-    specs: dict[str, ModelSpec] = field(default_factory=dict)
+    specs: dict[str, CapabilityManifest] = field(default_factory=dict)
     prefix_fallbacks: dict[str, str] = field(default_factory=dict)
     default_big: str = "claude-opus-4-7"
     default_small: str = "claude-haiku-4-5"
 
-    def resolve_chain(self, claude_model_name: str | None) -> list[ModelSpec]:
+    def resolve_chain(self, claude_model_name: str | None) -> list[CapabilityManifest]:
         """Return the primary spec followed by any failover specs, deduped."""
         primary = self.resolve(claude_model_name)
-        chain: list[ModelSpec] = [primary]
+        chain: list[CapabilityManifest] = [primary]
         seen = {primary.alias}
         for alias in primary.failover_to:
             if alias in self.specs and alias not in seen:
@@ -45,8 +67,8 @@ class ModelRegistry:
                 seen.add(alias)
         return chain
 
-    def resolve(self, claude_model_name: str | None) -> ModelSpec:
-        """Resolve a Claude-style model name to a configured ModelSpec.
+    def resolve(self, claude_model_name: str | None) -> CapabilityManifest:
+        """Resolve a Claude-style model name to a configured CapabilityManifest.
 
         Order:
           1. exact alias match
@@ -92,10 +114,25 @@ def load_model_registry(path: str | Path | None = None) -> ModelRegistry:
             )
         resolved = bundled
     data = yaml.safe_load(resolved.read_text(encoding="utf-8")) or {}
-    specs = {
-        alias: ModelSpec(alias=alias, **spec)
-        for alias, spec in (data.get("aliases") or {}).items()
-    }
+    specs = {}
+    for alias, spec_data in (data.get("aliases") or {}).items():
+        # Map flat config to nested structures
+        specs[alias] = CapabilityManifest(
+            alias=alias,
+            nvidia_id=spec_data["nvidia_id"],
+            supports_vision=spec_data.get("supports_vision", False),
+            reasoning=ReasoningConfig(
+                style=spec_data.get("reasoning_style", "none"),
+            ),
+            tools=ToolConfig(
+                supports=spec_data.get("supports_tools", True),
+            ),
+            max_context=spec_data.get("max_context", 1000000),
+            max_output=spec_data.get("max_output", 16384),
+            temperature_override=spec_data.get("temperature_override"),
+            failover_to=spec_data.get("failover_to") or [],
+        )
+
     return ModelRegistry(
         specs=specs,
         prefix_fallbacks=data.get("prefix_fallbacks") or {},

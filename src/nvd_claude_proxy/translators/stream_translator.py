@@ -41,6 +41,7 @@ import re
 
 from ..util.ids import new_message_id, new_thinking_signature
 from .tool_translator import ToolIdMap
+from .tool_controller import ToolInvocationController
 
 _FENCE_RE = re.compile(r"^```[a-z]*\s*", re.MULTILINE)
 
@@ -100,6 +101,7 @@ class _ToolBuf:
 class StreamTranslator:
     model_name: str
     tool_id_map: ToolIdMap
+    tool_controller: ToolInvocationController
     # Optional cap on reasoning tokens (from `thinking.budget_tokens`).
     # When set, we track reasoning chars (chars/4 ≈ tokens) and force-close the
     # thinking block once the budget is consumed so the model pivots to text.

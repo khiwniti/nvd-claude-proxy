@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from nvd_claude_proxy.config.models import ModelSpec
+from nvd_claude_proxy.config.models import CapabilityManifest
 from nvd_claude_proxy.translators.thinking_translator import (
     inject_reasoning_toggle,
     strip_prior_thinking_from_history,
@@ -8,7 +8,7 @@ from nvd_claude_proxy.translators.thinking_translator import (
 
 
 def _spec(style):
-    return ModelSpec(
+    return CapabilityManifest(
         alias="x",
         nvidia_id="x",
         supports_reasoning=True,
@@ -35,7 +35,7 @@ def test_slash_think():
 
 
 def test_none_style_passthrough():
-    spec = ModelSpec(alias="x", nvidia_id="x", supports_reasoning=False, reasoning_style="none")
+    spec = CapabilityManifest(alias="x", nvidia_id="x", supports_reasoning=False, reasoning_style="none")
     msgs = [{"role": "user", "content": "hi"}]
     out = inject_reasoning_toggle(msgs, spec, True)
     assert out == msgs

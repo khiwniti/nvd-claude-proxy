@@ -4,7 +4,7 @@ from __future__ import annotations
 import json as _json
 from typing import Any
 
-from ..config.models import ModelSpec
+from ..config.models import CapabilityManifest
 from ..util.pdf_extractor import document_block_to_text
 from ..util.tokens import approximate_tokens
 from .thinking_translator import (
@@ -61,7 +61,7 @@ def _inject_tool_discipline(messages: list[dict]) -> None:
         messages.insert(0, {"role": "system", "content": _TOOL_DISCIPLINE_ADDENDUM.strip()})
 
 
-def _flatten_system(system: Any, spec: ModelSpec) -> str | list[dict] | None:
+def _flatten_system(system: Any, spec: CapabilityManifest) -> str | list[dict] | None:
     """Anthropic `system` may be a string OR a list of blocks.
 
     If the model supports vision and the system prompt is a list containing
@@ -98,7 +98,7 @@ def _flatten_system(system: Any, spec: ModelSpec) -> str | list[dict] | None:
 
 
 def _anthropic_message_to_openai(
-    msg: dict, tool_id_map: ToolIdMap, spec: ModelSpec
+    msg: dict, tool_id_map: ToolIdMap, spec: CapabilityManifest
 ) -> list[dict]:
     """One Anthropic message may explode into multiple OpenAI messages because
     `tool_result` blocks become separate `role:"tool"` messages."""
@@ -215,7 +215,7 @@ def _anthropic_message_to_openai(
 
 def translate_request(
     anthropic_body: dict,
-    spec: ModelSpec,
+    spec: CapabilityManifest,
     tool_id_map: ToolIdMap,
 ) -> dict:
     openai_messages: list[dict] = []

@@ -10,27 +10,28 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nvd_claude_proxy.app import create_app
-from nvd_claude_proxy.config.models import ModelRegistry, ModelSpec, load_model_registry
+from nvd_claude_proxy.config.models import ModelRegistry, CapabilityManifest, load_model_registry
 from nvd_claude_proxy.translators.request_translator import translate_request
 from nvd_claude_proxy.translators.stream_translator import StreamTranslator
 from nvd_claude_proxy.translators.tool_translator import ToolIdMap
+from nvd_claude_proxy.translators.tool_controller import ToolInvocationController
 from nvd_claude_proxy.util.pdf_extractor import document_block_to_text
 
 
-# ── ModelSpec failover_to ──────────────────────────────────────────────────────
+# ── CapabilityManifest failover_to ──────────────────────────────────────────────────────
 
 def _make_registry() -> ModelRegistry:
-    big = ModelSpec(
+    big = CapabilityManifest(
         alias="claude-opus-4-7",
         nvidia_id="nvidia/big",
         failover_to=["claude-sonnet-4-6", "claude-haiku-4-5"],
     )
-    mid = ModelSpec(
+    mid = CapabilityManifest(
         alias="claude-sonnet-4-6",
         nvidia_id="nvidia/mid",
         failover_to=["claude-haiku-4-5"],
     )
-    small = ModelSpec(alias="claude-haiku-4-5", nvidia_id="nvidia/small")
+    small = CapabilityManifest(alias="claude-haiku-4-5", nvidia_id="nvidia/small")
     return ModelRegistry(
         specs={s.alias: s for s in [big, mid, small]},
         default_big="claude-opus-4-7",
@@ -57,13 +58,13 @@ def test_resolve_chain_no_failover():
 
 def test_resolve_chain_deduplicates():
     """If failover list contains the primary alias, it must be skipped."""
-    spec = ModelSpec(
+    spec = CapabilityManifest(
         alias="claude-opus-4-7",
         nvidia_id="nvidia/big",
         failover_to=["claude-opus-4-7", "claude-haiku-4-5"],
     )
     reg = ModelRegistry(
-        specs={"claude-opus-4-7": spec, "claude-haiku-4-5": ModelSpec(alias="claude-haiku-4-5", nvidia_id="x")},
+        specs={"claude-opus-4-7": spec, "claude-haiku-4-5": CapabilityManifest(alias="claude-haiku-4-5", nvidia_id="x")},
         default_big="claude-opus-4-7",
     )
     chain = reg.resolve_chain("claude-opus-4-7")
@@ -71,7 +72,7 @@ def test_resolve_chain_deduplicates():
 
 
 def test_failover_to_unknown_alias_ignored():
-    spec = ModelSpec(
+    spec = CapabilityManifest(
         alias="claude-opus-4-7",
         nvidia_id="nvidia/big",
         failover_to=["does-not-exist"],
@@ -83,8 +84,8 @@ def test_failover_to_unknown_alias_ignored():
 
 # ── disable_parallel_tool_use ─────────────────────────────────────────────────
 
-def _spec() -> ModelSpec:
-    return ModelSpec(alias="claude-opus-4-7", nvidia_id="nvidia/big", supports_tools=True)
+def _spec() -> CapabilityManifest:
+    return CapabilityManifest(alias="claude-opus-4-7", nvidia_id="nvidia/big", supports_tools=True)
 
 
 def test_disable_parallel_tool_use_sets_flag():
@@ -195,9 +196,12 @@ def test_document_block_wired_into_request_translator():
 # ── thinking.budget_tokens ────────────────────────────────────────────────────
 
 def _run_stream(chunks: list[dict], budget_tokens: int | None = None) -> list[dict]:
+    spec = CapabilityManifest(alias="claude-opus-4-7", nvidia_id="nvidia/big")
+    tool_controller = ToolInvocationController(spec, ToolIdMap())
     st = StreamTranslator(
         model_name="claude-opus-4-7",
         tool_id_map=ToolIdMap(),
+        tool_controller=tool_controller,
         budget_tokens=budget_tokens,
     )
     events = []

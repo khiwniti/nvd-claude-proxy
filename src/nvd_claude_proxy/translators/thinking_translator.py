@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import re
 
-from ..config.models import ModelSpec
+from ..config.models import CapabilityManifest
 
 _THINK_RE = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
 
 
 def inject_reasoning_toggle(
     openai_messages: list[dict],
-    spec: ModelSpec,
+    spec: CapabilityManifest,
     thinking: dict | bool | None,
 ) -> list[dict]:
     """Prepend/adjust a system message to toggle reasoning per NVIDIA model.

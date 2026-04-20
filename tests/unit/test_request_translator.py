@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from nvd_claude_proxy.config.models import ModelSpec
+from nvd_claude_proxy.config.models import CapabilityManifest
 from nvd_claude_proxy.translators.request_translator import translate_request
 from nvd_claude_proxy.translators.tool_translator import ToolIdMap
 
 
-def _spec(**kw) -> ModelSpec:
+def _spec(**kw) -> CapabilityManifest:
     base = dict(
         alias="claude-opus-4-7",
         nvidia_id="nvidia/llama-3.1-nemotron-ultra-253b-v1",
@@ -17,7 +17,7 @@ def _spec(**kw) -> ModelSpec:
         max_output=32768,
     )
     base.update(kw)
-    return ModelSpec(**base)
+    return CapabilityManifest(**base)
 
 
 def test_flatten_system_string_and_drop_cache_control():

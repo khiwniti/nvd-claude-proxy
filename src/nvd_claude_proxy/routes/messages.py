@@ -14,6 +14,7 @@ from ..errors.mapper import openai_error_to_anthropic
 from ..translators.request_translator import ContextOverflowError, translate_request
 from ..translators.response_translator import translate_response
 from ..translators.stream_translator import StreamTranslator
+from ..translators.tool_controller import ToolInvocationController
 from ..translators.tool_translator import ToolIdMap
 from ..util.anthropic_headers import new_request_id, standard_response_headers
 from ..util.cost import estimate_cost_usd
@@ -100,6 +101,7 @@ async def messages(request: Request):
     spec_chain = registry.resolve_chain(requested_model)
     spec = spec_chain[0]
     tool_id_map = ToolIdMap()
+    tool_controller = ToolInvocationController(spec, tool_id_map)
     try:
         payload = translate_request(body, spec, tool_id_map)
     except ContextOverflowError as exc:
@@ -232,6 +234,7 @@ async def messages(request: Request):
                 st = StreamTranslator(
                     model_name=requested_model,
                     tool_id_map=active_tool_id_map,
+                    tool_controller=tool_controller,
                     budget_tokens=budget_tokens,
                     estimated_input_tokens=est_input_tokens,
                 )
