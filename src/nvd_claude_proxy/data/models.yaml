@@ -79,6 +79,16 @@ aliases:
     max_context: 1000000
     max_output: 16384
 
+  # GLM-5-1
+  glm-5-1:
+    nvidia_id: "nvidia/glm-5-1"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: false
+    reasoning_style: "none"
+    max_context: 1000000
+    max_output: 16384
+
 prefix_fallbacks:
   "claude-3-5-sonnet": "claude-sonnet-4-6"
   "claude-3-7-sonnet": "claude-sonnet-4-6"
