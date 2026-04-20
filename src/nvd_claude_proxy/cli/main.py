@@ -196,10 +196,12 @@ def code(
     no_claude: bool = typer.Option(False, "--no-claude", help="Start proxy only, don't launch claude."),
     claude_args: str = typer.Option("", "--claude-args", help='Extra args passed to claude, e.g. "--dangerously-skip-permissions".'),
     api_key: str = typer.Option(None, "--api-key", "-k", help="NVIDIA API key (nvapi-…). Overrides NVIDIA_API_KEY env var."),
+    update_claude: bool = typer.Option(False, "--update-claude", help="Run npm update on claude-code before launching."),
 ) -> None:
     """Start the proxy then launch [bold]claude[/bold] automatically.
 
-    Equivalent to [cyan]ncp proxy[/cyan] + waiting for ready + [cyan]claude[/cyan].
+    Installs [cyan]@anthropic-ai/claude-code[/cyan] via npm if not present.
+    Pass [cyan]--update-claude[/cyan] to also pull the latest version.
     """
     if api_key:
         os.environ["NVIDIA_API_KEY"] = api_key
@@ -216,6 +218,7 @@ def code(
         model=effective_model,
         launch_claude=not no_claude,
         claude_extra_args=claude_args.split() if claude_args.strip() else [],
+        update_claude=update_claude,
     )
 
 
@@ -227,6 +230,7 @@ def _run_proxy_and_claude(
     model: str,
     launch_claude: bool,
     claude_extra_args: list[str],
+    update_claude: bool = False,
 ) -> None:
     registry = _load_registry(settings)
 
@@ -283,11 +287,11 @@ def _run_proxy_and_claude(
         return
 
     # ── launch claude ──────────────────────────────────────────────────────────
-    claude_bin = _find_claude()
+    claude_bin = _ensure_claude(update=update_claude)
     if claude_bin is None:
         err_console.print(
-            "[yellow]Warning:[/yellow] [bold]claude[/bold] not found in PATH. "
-            "Install it with [cyan]npm install -g @anthropic-ai/claude-code[/cyan]\n"
+            "[red]✗[/red] Could not install [bold]claude[/bold]. "
+            "Please install Node.js (https://nodejs.org) then re-run [cyan]ncp code[/cyan].\n"
             "The proxy is running — connect any Anthropic-compatible client."
         )
         console.print("[green]Proxy running.[/green]  Press [bold]Ctrl+C[/bold] to stop.\n")
@@ -325,10 +329,98 @@ def _run_proxy_and_claude(
     raise typer.Exit(getattr(result, "returncode", 0))
 
 
-def _find_claude() -> str | None:
-    """Return the full path to the `claude` binary, or None if not found."""
+def _ensure_claude(*, update: bool = False) -> str | None:
+    """Return the path to the `claude` binary, installing or updating it if needed.
+
+    Installation strategy:
+      1. If `claude` is already in PATH and `update` is False → return immediately.
+      2. If `update` is True and npm is available → run ``npm update -g @anthropic-ai/claude-code``.
+      3. If `claude` is not in PATH and npm is available → run ``npm install -g @anthropic-ai/claude-code``.
+      4. If npm is not available → print instructions and return None.
+    """
     import shutil
-    return shutil.which("claude")
+
+    claude = shutil.which("claude")
+    npm = shutil.which("npm")
+
+    if claude and not update:
+        return claude
+
+    if npm is None:
+        if claude is None:
+            err_console.print(
+                "[yellow]⚠[/yellow]  [bold]npm[/bold] not found. "
+                "Install Node.js from [cyan]https://nodejs.org[/cyan] then re-run [cyan]ncp code[/cyan]."
+            )
+        return claude  # may still be non-None (installed but update skipped)
+
+    if claude is None:
+        console.print(
+            "[dim]claude not found — installing [bold]@anthropic-ai/claude-code[/bold] via npm …[/dim]"
+        )
+        action = "install"
+    else:
+        console.print(
+            "[dim]Checking for [bold]@anthropic-ai/claude-code[/bold] updates …[/dim]"
+        )
+        action = "install"  # npm install -g always upgrades to latest
+
+    try:
+        result = subprocess.run(
+            [npm, "install", "-g", "@anthropic-ai/claude-code"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode == 0:
+            new_path = shutil.which("claude")
+            if new_path:
+                console.print(f"[green]✓[/green] claude installed/updated at [cyan]{new_path}[/cyan]")
+                return new_path
+            # PATH may not include npm global bin yet — try common locations
+            for candidate in _npm_global_bin_candidates():
+                probe = candidate / "claude"
+                if probe.exists():
+                    console.print(f"[green]✓[/green] claude installed at [cyan]{probe}[/cyan]")
+                    return str(probe)
+            err_console.print(
+                "[yellow]⚠[/yellow]  npm install succeeded but `claude` still not in PATH. "
+                "Add npm global bin to your PATH, then run [cyan]ncp code[/cyan] again."
+            )
+            return None
+        else:
+            err_console.print(
+                f"[red]✗[/red]  npm {action} failed:\n{result.stderr.strip()}"
+            )
+            return claude  # return existing if we had one
+    except subprocess.TimeoutExpired:
+        err_console.print("[red]✗[/red]  npm timed out after 120 s.")
+        return claude
+    except Exception as exc:  # noqa: BLE001
+        err_console.print(f"[red]✗[/red]  npm error: {exc}")
+        return claude
+
+
+def _npm_global_bin_candidates() -> list["Path"]:
+    """Common npm global bin directories that might not be in PATH."""
+    home = Path.home()
+    candidates = [
+        home / ".npm-global" / "bin",
+        home / ".local" / "bin",
+        Path("/usr/local/bin"),
+        Path("/usr/local/lib/node_modules/.bin"),
+    ]
+    # macOS homebrew node
+    for prefix in ["/opt/homebrew", "/usr/local/opt/node"]:
+        candidates.append(Path(prefix) / "bin")
+    # nvm
+    nvm_dir = os.environ.get("NVM_DIR") or str(home / ".nvm")
+    nvm_current = Path(nvm_dir) / "versions" / "node"
+    if nvm_current.is_dir():
+        for node_ver in sorted(nvm_current.iterdir(), reverse=True):
+            candidates.append(node_ver / "bin")
+            break  # only latest
+    return candidates
 
 
 # ── ncp proxy ─────────────────────────────────────────────────────────────────
