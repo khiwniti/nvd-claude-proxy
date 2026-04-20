@@ -29,46 +29,29 @@ Rules this state machine enforces:
   • We MUST delay emitting content_block_start for a tool_use until we have
     both id and name, otherwise Claude Code cannot match the eventual
     tool_result back to it.
+  • Tool arguments are emitted progressively (input_json_delta) as fragments
+    arrive once the JSON object start character '{' or '[' is found. Leading
+    prose and markdown fences are discarded.
   • Usage from the final empty-choices chunk populates message_delta.
   • Mid-stream OpenAI errors become an Anthropic `error` SSE event.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Iterator, Literal
 
-import re
-
 from ..util.ids import new_message_id, new_thinking_signature
-from .tool_translator import ToolIdMap
 from .tool_controller import ToolInvocationController
+from .tool_translator import ToolIdMap
 
 _FENCE_RE = re.compile(r"^```[a-z]*\s*", re.MULTILINE)
+# Matches the first JSON object/array start character.
+_JSON_START_RE = re.compile(r"[{\[]")
 
-# Known hallucinated tools from training data mismatch - these do not exist
-# in the real Claude Code tool registry and cause infinite loops if allowed
+# Known hallucinated tools from training data mismatch — these do not exist
+# in the real Claude Code tool registry and cause infinite loops if allowed.
 _HALLUCINATED_TOOLS: frozenset[str] = frozenset({"Skill", "Read", "migrate", "status"})
-
-
-def _clean_tool_args(raw: str) -> str:
-    """Strip markdown fences and leading prose from NIM tool-call arguments.
-
-    Some NIM model variants wrap JSON in markdown code fences or prefix it with
-    prose like "Here are the parameters:". We normalise to a bare JSON string
-    so that the Anthropic SDK's JSON.parse() succeeds.
-    """
-    s = raw.strip()
-    # Strip ```json\n ... ``` or ``` ... ```
-    if s.startswith("```"):
-        s = _FENCE_RE.sub("", s, count=1).rstrip("`").strip()
-    # Strip leading non-JSON prose up to the first '{' or '['
-    first = min(
-        (s.find("{") if "{" in s else len(s)),
-        (s.find("[") if "[" in s else len(s)),
-    )
-    if first > 0:
-        s = s[first:]
-    return s
 
 BlockType = Literal["text", "thinking", "tool_use"]
 
@@ -77,7 +60,9 @@ _FINISH_TO_STOP: dict[str, str] = {
     "length": "max_tokens",
     "tool_calls": "tool_use",
     "function_call": "tool_use",
-    "content_filter": "refusal",
+    # content_filter maps to end_turn — "refusal" is not a valid Anthropic
+    # stop_reason and causes SDK deserialization errors.
+    "content_filter": "end_turn",
 }
 
 
@@ -91,10 +76,26 @@ class _ToolBuf:
     anth_index: int | None = None
     started: bool = False
     closed: bool = False
-    # args received before id+name arrived (flushed into full_args at start)
+    # args received before id+name arrived (flushed into streaming once started)
     pre_start_buffer: str = ""
-    # ALL argument fragments accumulated post-start; cleaned and emitted at close
-    full_args: str = ""
+    # Once the tool block is open, tracks whether we've seen the JSON start
+    # character so we can strip leading prose/fences before emitting.
+    _json_mode: bool = False
+    # Accumulates raw text before the first JSON start char is found.
+    _pre_json_acc: str = ""
+
+
+def _strip_leading_prose(raw: str) -> str:
+    """Strip markdown code fences and leading non-JSON text from a tool-args string.
+
+    Returns the substring starting from the first '{' or '[', or the original
+    string if it already starts with a JSON character.
+    """
+    s = raw
+    if s.startswith("```"):
+        s = _FENCE_RE.sub("", s, count=1).rstrip("`").strip()
+    m = _JSON_START_RE.search(s)
+    return s[m.start():] if m else ""
 
 
 @dataclass
@@ -121,11 +122,13 @@ class StreamTranslator:
     _usage_input: int = 0
     _usage_output: int = 0
     _finished: bool = False
-    _thinking_chars: int = 0      # accumulated reasoning chars for budget tracking
+    _thinking_chars: int = 0         # accumulated reasoning chars for budget tracking
     _thinking_budget_hit: bool = False  # True once budget exhausted
 
-    # Repetition detection for infinite loop prevention
-    _last_tool_names: list[str | None] = field(default_factory=lambda: [None] * 5)
+    # Repetition detection for infinite loop prevention — tracks the last N
+    # tool names seen. Uses a plain list (not None-padded) so the count
+    # check is accurate from the very first tool call.
+    _last_tool_names: list[str] = field(default_factory=list)
     _repetition_count: int = 0
     _MAX_REPETITIONS: int = 3  # Force stop after seeing same tool pattern N times
 
@@ -185,33 +188,19 @@ class StreamTranslator:
             self._open_thinking_signature_sent = False
 
     def _close_open_tool_use(self) -> Iterator[dict]:
+        """Close the currently open tool_use block.
+
+        With progressive streaming, argument fragments have already been emitted
+        as input_json_delta events; we only need to emit content_block_stop.
+        """
         if (
             self._open_block_type == "tool_use"
             and self._open_block_index is not None
         ):
-            # Emit all accumulated arguments as a single clean delta before stop.
-            for buf in self._tools_by_openai_idx.values():
-                if buf.anth_index == self._open_block_index and not buf.closed:
-                    if buf.full_args:
-                        clean = _clean_tool_args(buf.full_args)
-                        if clean:
-                            yield self._emit(
-                                "content_block_delta",
-                                {
-                                    "type": "content_block_delta",
-                                    "index": buf.anth_index,
-                                    "delta": {
-                                        "type": "input_json_delta",
-                                        "partial_json": clean,
-                                    },
-                                },
-                            )
-                    break
             yield self._emit(
                 "content_block_stop",
                 {"type": "content_block_stop", "index": self._open_block_index},
             )
-            # Mark matching tool buf as closed.
             for buf in self._tools_by_openai_idx.values():
                 if buf.anth_index == self._open_block_index:
                     buf.closed = True
@@ -256,6 +245,46 @@ class StreamTranslator:
             },
         )
 
+    def _emit_tool_args_fragment(self, buf: _ToolBuf, fragment: str) -> Iterator[dict]:
+        """Progressively emit one tool-argument fragment as input_json_delta.
+
+        Leading prose and markdown fences are discarded before the first JSON
+        start character '{' or '[' is encountered. Once JSON mode is active,
+        all subsequent fragments bypass the scanner and are emitted directly.
+        """
+        if not fragment:
+            return
+        if buf._json_mode:
+            yield self._emit(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": buf.anth_index,
+                    "delta": {"type": "input_json_delta", "partial_json": fragment},
+                },
+            )
+            return
+        # Not yet in JSON mode — accumulate and scan for the JSON start.
+        combined = buf._pre_json_acc + fragment
+        if combined.startswith("```"):
+            combined = _FENCE_RE.sub("", combined, count=1).rstrip("`").strip()
+        m = _JSON_START_RE.search(combined)
+        if m:
+            buf._json_mode = True
+            buf._pre_json_acc = ""
+            json_fragment = combined[m.start():]
+            if json_fragment:
+                yield self._emit(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": buf.anth_index,
+                        "delta": {"type": "input_json_delta", "partial_json": json_fragment},
+                    },
+                )
+        else:
+            buf._pre_json_acc = combined
+
     # ── public API ────────────────────────────────────────────────────────
 
     def feed(self, openai_chunk: dict) -> Iterator[dict]:
@@ -288,7 +317,6 @@ class StreamTranslator:
             if self.budget_tokens is not None:
                 remaining_chars = max(0, self.budget_tokens * 4 - self._thinking_chars)
                 if remaining_chars <= 0:
-                    # Budget exhausted — close block and suppress future reasoning.
                     self._thinking_budget_hit = True
                     yield from self._close_open_text_or_thinking()
                     reasoning = ""
@@ -347,7 +375,6 @@ class StreamTranslator:
             # These occur when the model confuses training data with actual tool
             # schemas, leading to infinite loops with fake "Skill"/"Read" calls.
             if buf.name in _HALLUCINATED_TOOLS:
-                # Convert hallucinated tool to a text warning and skip processing
                 if self._open_block_type != "text":
                     yield from self._close_any_open()
                     yield from self._open_text_block()
@@ -363,12 +390,11 @@ class StreamTranslator:
                         "delta": {"type": "text_delta", "text": warning},
                     },
                 )
-                # Mark as processed to prevent re-emission
                 buf.started = True
                 buf.closed = True
                 continue
 
-            # Can we open this block yet?
+            # Can we open this block yet? Need both id and name.
             if not buf.started and buf.openai_id and buf.name:
                 # Close any currently-open block (including a different tool_use).
                 if (
@@ -386,7 +412,6 @@ class StreamTranslator:
                 self._open_block_type = "tool_use"
                 self._open_block_index = buf.anth_index
                 buf.started = True
-                # Restore the original name so Claude Code can match it.
                 emit_name = self.tool_id_map.original_tool_name(buf.name or "")
                 yield self._emit(
                     "content_block_start",
@@ -401,11 +426,12 @@ class StreamTranslator:
                         },
                     },
                 )
-                # Flush pre-start buffer + new fragment into full_args.
-                # (All args are emitted as a single clean delta at close time.)
-                buf.full_args = buf.pre_start_buffer + new_args
+                # Flush pre-start buffer + new fragment progressively.
+                initial = buf.pre_start_buffer + new_args
                 buf.pre_start_buffer = ""
-            elif buf.started and new_args:
+                yield from self._emit_tool_args_fragment(buf, initial)
+
+            elif buf.started and not buf.closed and new_args:
                 # If a different tool is currently open, switch to this one.
                 if (
                     self._open_block_type == "tool_use"
@@ -414,37 +440,48 @@ class StreamTranslator:
                     yield from self._close_open_tool_use()
                     self._open_block_type = "tool_use"
                     self._open_block_index = buf.anth_index
-                # Accumulate — do not emit yet; cleaned + emitted at close.
-                buf.full_args += new_args
+                # Emit this fragment progressively.
+                yield from self._emit_tool_args_fragment(buf, new_args)
+
             elif not buf.started and new_args:
                 # id/name haven't arrived yet — keep buffering.
                 buf.pre_start_buffer += new_args
 
-            # Track tool names for repetition detection
+            # Track tool names for repetition/infinite-loop detection.
             if buf.name and buf.started:
-                self._last_tool_names.pop(0)
                 self._last_tool_names.append(buf.name)
-                # Check for repeating pattern (e.g., Skill -> Read -> Skill -> Read)
-                unique_tools = set(self._last_tool_names)
-                if len(unique_tools) <= 2 and self._last_tool_names.count(buf.name) >= 4:
-                    self._repetition_count += 1
-                    if self._repetition_count >= self._MAX_REPETITIONS:
-                        # Force stop the stream - we're in a loop
-                        yield from self._close_any_open()
-                        yield self._emit(
-                            "content_block_delta",
-                            {
-                                "type": "content_block_delta",
-                                "index": self._open_block_index if self._open_block_index is not None else 0,
-                                "delta": {
-                                    "type": "text_delta",
-                                    "text": "\n[PROXY ERROR: Detected infinite tool loop - forcing termination]\n",
+                if len(self._last_tool_names) > 10:
+                    self._last_tool_names.pop(0)
+                # Detect a tight repetition pattern: ≤2 unique tools making up
+                # ≥4 of the last entries → likely stuck in a loop.
+                if len(self._last_tool_names) >= 4:
+                    unique = set(self._last_tool_names[-6:])
+                    recent_count = self._last_tool_names[-6:].count(buf.name)
+                    if len(unique) <= 2 and recent_count >= 4:
+                        self._repetition_count += 1
+                        if self._repetition_count >= self._MAX_REPETITIONS:
+                            # Force-stop: close any open block, open a fresh text
+                            # block for the warning so the delta has a valid index.
+                            yield from self._close_any_open()
+                            yield from self._open_text_block()
+                            yield self._emit(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": self._open_block_index,
+                                    "delta": {
+                                        "type": "text_delta",
+                                        "text": (
+                                            "\n[PROXY: Detected infinite tool-use "
+                                            "loop — stopping generation]\n"
+                                        ),
+                                    },
                                 },
-                            },
-                        )
-                        self._stop_reason = "refusal"
-                        self._finished = True
-                        return
+                            )
+                            yield from self._close_open_text_or_thinking()
+                            self._stop_reason = "end_turn"
+                            self._finished = True
+                            return
 
         # 4) Finish reason.
         if finish:
@@ -466,7 +503,13 @@ class StreamTranslator:
                     "stop_reason": self._stop_reason,
                     "stop_sequence": None,
                 },
-                "usage": {"output_tokens": self._usage_output},
+                # output_tokens comes from the trailing usage chunk;
+                # input_tokens are reported in message_start (estimated) and
+                # reconciled here with the actual value if the model sent it.
+                "usage": {
+                    "input_tokens": self._usage_input or self.estimated_input_tokens,
+                    "output_tokens": self._usage_output,
+                },
             },
         )
         yield self._emit("message_stop", {"type": "message_stop"})
