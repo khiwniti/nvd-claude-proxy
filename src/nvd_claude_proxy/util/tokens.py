@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import tiktoken
+
+_enc = tiktoken.get_encoding("cl100k_base")
+
+# Field names whose *values* are base64 image payloads we want to skip when
+# tokenizing a request body.
+_SKIP_KEYS = {"data"}
+
+# tiktoken is O(n) in bytes but has real overhead; for very large payloads
+# (Claude Code /init with 190 tool schemas ≈ 100-200kB of text) we prefer a
+# cheaper 4-chars-per-token heuristic that's provably good enough for the
+# context-budget clamp, which just needs to know "are we about to overflow?".
+_FAST_PATH_THRESHOLD_CHARS = 60_000
+
+
+def _walk(obj: Any, parts: list[str]) -> None:
+    """Push all tokenizable text into `parts`, including JSON keys —
+    schemas have many short keys (type/properties/required/…) that tokenize
+    to real input tokens when NVIDIA serializes the tool list into the prompt.
+    """
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in _SKIP_KEYS:
+                continue
+            # Include the key itself; NVIDIA prompt-serializes every key.
+            parts.append(k)
+            _walk(v, parts)
+    elif isinstance(obj, list):
+        for v in obj:
+            _walk(v, parts)
+    elif isinstance(obj, str):
+        parts.append(obj)
+    elif obj is None or isinstance(obj, bool):
+        pass
+    else:
+        parts.append(json.dumps(obj))
+
+
+def approximate_tokens(body: dict) -> int:
+    """Pessimistic ~+10% approximation of the input-token count.
+
+    Deliberately biases *up* so the context-budget clamp is safe. On tool-heavy
+    payloads cl100k_base undercounts vs Nemotron by ~5-10%; the heuristic uses
+    3.0 chars/token for schema-dense JSON which tokenizes more finely.
+    """
+    parts: list[str] = []
+    _walk(body, parts)
+    text = "\n".join(parts)
+    n = len(text)
+    if n > _FAST_PATH_THRESHOLD_CHARS:
+        # Tool-schema JSON has many single-char tokens (braces, quotes, colons)
+        # that NVIDIA's BPE rarely merges. 3.0 chars/token is a robust upper
+        # bound vs cl100k at 3.8-4.0 on the same content.
+        return int(n / 3.0) + 3
+    # Small payloads: use tiktoken directly for accuracy.
+    return len(_enc.encode(text)) + 3

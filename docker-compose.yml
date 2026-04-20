@@ -1,0 +1,14 @@
+services:
+  proxy:
+    build: .
+    env_file: .env
+    ports:
+      - "8788:8788"
+    volumes:
+      - ./config:/app/config:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://127.0.0.1:8788/healthz').raise_for_status()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

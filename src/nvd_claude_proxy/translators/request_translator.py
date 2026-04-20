@@ -1,0 +1,262 @@
+"""Anthropic Messages request → NVIDIA (OpenAI) chat.completions request."""
+from __future__ import annotations
+
+import json as _json
+from typing import Any
+
+from ..config.models import ModelSpec
+from ..util.pdf_extractor import document_block_to_text
+from ..util.tokens import approximate_tokens
+from .thinking_translator import (
+    inject_reasoning_toggle,
+    strip_prior_thinking_from_history,
+)
+from .tool_translator import (
+    ToolIdMap,
+    anthropic_tool_choice_to_openai,
+    anthropic_tools_to_openai,
+)
+from .vision_translator import anthropic_image_to_openai
+
+# Leave this many tokens of headroom between estimated input+output and the
+# model's hard context window. Real-world drift observed:
+#   Claude Code /init with 273 tools: cl100k estimate ~93k, NVIDIA actual 99.7k
+#   Context7 MCP query: cl100k estimate ~121k, NVIDIA actual 132k  (⇒ ~9% under)
+# 16 k headroom absorbs the worst-case undercount we've seen in production.
+_CONTEXT_HEADROOM = 16_384
+# Minimum we will ever allow for output even under heavy clamping so the
+# model has room for at least a brief answer.
+_MIN_OUTPUT = 256
+
+
+class ContextOverflowError(ValueError):
+    """Raised when estimated input tokens already exceed the model's context window.
+    The caller should convert this into a proper Anthropic 400 response rather
+    than forwarding the request to NVIDIA (which will always fail with a 400).
+    """
+    def __init__(self, est_input: int, max_context: int, model: str) -> None:
+        self.est_input = est_input
+        self.max_context = max_context
+        self.model = model
+        super().__init__(
+            f"Estimated input ({est_input} tokens) exceeds "
+            f"{model} context window ({max_context} tokens). "
+            "Reduce messages or tool schemas."
+        )
+
+
+def _flatten_system(system: Any) -> str | None:
+    """Anthropic `system` may be a string OR a list of text blocks.
+
+    We concatenate text blocks (dropping `cache_control` — NIM has no equivalent).
+    """
+    if system is None:
+        return None
+    if isinstance(system, str):
+        return system or None
+    parts: list[str] = []
+    for b in system:
+        if isinstance(b, dict) and b.get("type") == "text":
+            txt = b.get("text")
+            if txt:
+                parts.append(txt)
+    return "\n\n".join(parts) if parts else None
+
+
+def _anthropic_message_to_openai(
+    msg: dict, tool_id_map: ToolIdMap
+) -> list[dict]:
+    """One Anthropic message may explode into multiple OpenAI messages because
+    `tool_result` blocks become separate `role:"tool"` messages."""
+    role = msg["role"]
+    content = msg.get("content")
+
+    if isinstance(content, str):
+        return [{"role": role, "content": content}]
+
+    text_parts: list[dict] = []
+    tool_calls: list[dict] = []
+    tool_result_messages: list[dict] = []
+
+    for block in content or []:
+        btype = block.get("type")
+        if btype == "text":
+            text_parts.append({"type": "text", "text": block.get("text", "")})
+        elif btype == "image":
+            text_parts.append(anthropic_image_to_openai(block))
+        elif btype in ("thinking", "redacted_thinking"):
+            # NVIDIA has no way to consume an opaque Anthropic signature; drop.
+            continue
+        elif btype == "tool_use":
+            tid = block["id"]
+            tool_id_map.register_anthropic(tid)
+            tool_calls.append(
+                {
+                    "id": tid,
+                    "type": "function",
+                    "function": {
+                        "name": block["name"],
+                        "arguments": _json.dumps(
+                            block.get("input", {}), ensure_ascii=False
+                        ),
+                    },
+                }
+            )
+        elif btype == "tool_result":
+            tid = block["tool_use_id"]
+            openai_id = tool_id_map.anthropic_to_openai(tid)
+            raw = block.get("content", "")
+            if isinstance(raw, list):
+                # Flatten multi-block tool_result content to text.
+                # OpenAI role:"tool" doesn't accept multimodal content, so image
+                # blocks are converted to a text placeholder preserving intent.
+                flat: list[str] = []
+                for sub in raw:
+                    if not isinstance(sub, dict):
+                        continue
+                    stype = sub.get("type")
+                    if stype == "text":
+                        flat.append(sub.get("text", ""))
+                    elif stype == "image":
+                        src = sub.get("source") or {}
+                        media = src.get("media_type", "image")
+                        if src.get("type") == "base64":
+                            flat.append(f"[image/{media}: {len(src.get('data',''))} chars base64]")
+                        elif src.get("type") == "url":
+                            flat.append(f"[image url: {src.get('url','')}]")
+                        else:
+                            flat.append("[image]")
+                raw = "\n".join(flat)
+            tool_result_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": openai_id,
+                    "content": raw if isinstance(raw, str) else str(raw),
+                }
+            )
+        elif btype == "document":
+            text = document_block_to_text(block)
+            if text:
+                text_parts.append({"type": "text", "text": text})
+        # Other block types (server_tool_*, search_result, container_upload) are dropped.
+
+    out: list[dict] = []
+    if role == "assistant":
+        m: dict[str, Any] = {"role": "assistant"}
+        if text_parts:
+            if any(p["type"] != "text" for p in text_parts):
+                m["content"] = text_parts
+            else:
+                m["content"] = "".join(p["text"] for p in text_parts)
+        else:
+            m["content"] = None
+        if tool_calls:
+            m["tool_calls"] = tool_calls
+        out.append(m)
+    else:  # "user" — tool_result blocks live here
+        if text_parts:
+            if any(p["type"] != "text" for p in text_parts):
+                out.append({"role": "user", "content": text_parts})
+            else:
+                out.append(
+                    {"role": "user", "content": "".join(p["text"] for p in text_parts)}
+                )
+        out.extend(tool_result_messages)
+    return out
+
+
+def translate_request(
+    anthropic_body: dict,
+    spec: ModelSpec,
+    tool_id_map: ToolIdMap,
+) -> dict:
+    openai_messages: list[dict] = []
+    system_str = _flatten_system(anthropic_body.get("system"))
+    if system_str:
+        openai_messages.append({"role": "system", "content": system_str})
+    for m in anthropic_body.get("messages") or []:
+        openai_messages.extend(_anthropic_message_to_openai(m, tool_id_map))
+
+    # Prior-turn reasoning cleanup (only affects assistant text already in history).
+    openai_messages = strip_prior_thinking_from_history(openai_messages)
+
+    # Reasoning toggle (Nemotron v1 / v1.5 / Nemotron 3 family).
+    thinking_requested = anthropic_body.get("thinking") is not None
+    openai_messages = inject_reasoning_toggle(openai_messages, spec, thinking_requested)
+
+    requested_max = int(anthropic_body.get("max_tokens") or spec.max_output)
+
+    # Build the tool payload up front so we can include it in the input-size
+    # estimate — Claude Code's `/init` sends ~190 tool schemas that dominate
+    # the prompt budget, and missing them caused spurious 400s from NVIDIA.
+    # When a lot of tools are present, tighten per-description limits to keep
+    # the prompt under the model's context window.
+    mapped_tools: list[dict] = []
+    if (tools := anthropic_body.get("tools")) and spec.supports_tools:
+        tool_count = len(tools)
+        if tool_count > 100:
+            desc_cap = 160
+        elif tool_count > 40:
+            desc_cap = 280
+        else:
+            desc_cap = 480
+        mapped_tools = anthropic_tools_to_openai(
+            tools, tool_id_map=tool_id_map, description_cap=desc_cap
+        )
+
+    # NVIDIA rejects the request if `max_tokens + input_tokens > max_context`.
+    # Estimate with cl100k_base over *everything* that will be billed as input:
+    # messages (system+user+assistant+tool) and tool schemas.
+    est_input = approximate_tokens(
+        {"messages": openai_messages, "tools": mapped_tools}
+    )
+    # Pre-flight guard: if the input alone fills the window, bail immediately
+    # with a structured error rather than letting NVIDIA return a cryptic 400.
+    if est_input >= spec.max_context - _MIN_OUTPUT:
+        raise ContextOverflowError(est_input, spec.max_context, spec.alias)
+
+    context_budget = max(
+        _MIN_OUTPUT,
+        spec.max_context - est_input - _CONTEXT_HEADROOM,
+    )
+    effective_max = max(
+        _MIN_OUTPUT,
+        min(requested_max, spec.max_output, context_budget),
+    )
+
+    payload: dict[str, Any] = {
+        "model": spec.nvidia_id,
+        "messages": openai_messages,
+        "max_tokens": effective_max,
+        "stream": bool(anthropic_body.get("stream", False)),
+    }
+
+    # Sampling params.
+    temp = anthropic_body.get("temperature")
+    if spec.temperature_override is not None:
+        payload["temperature"] = spec.temperature_override
+    elif temp is not None:
+        payload["temperature"] = temp
+    if (p := anthropic_body.get("top_p")) is not None:
+        payload["top_p"] = p
+    if (k := anthropic_body.get("top_k")) is not None:
+        # OpenAI REST doesn't standardize top_k; vLLM/NIM accepts it.
+        payload["top_k"] = k
+    if (ss := anthropic_body.get("stop_sequences")) is not None:
+        payload["stop"] = ss
+
+    # Tools.
+    if mapped_tools:
+        payload["tools"] = mapped_tools
+        if (tc := anthropic_body.get("tool_choice")) is not None:
+            payload["tool_choice"] = anthropic_tool_choice_to_openai(tc)
+            # Anthropic allows callers to disable parallel tool calls; OpenAI/NIM
+            # supports this via `parallel_tool_calls: false`.
+            if isinstance(tc, dict) and tc.get("disable_parallel_tool_use"):
+                payload["parallel_tool_calls"] = False
+
+    # Qwen3-style thinking kwarg (bypasses system-msg toggle).
+    if spec.reasoning_style == "qwen-kwargs":
+        payload["chat_template_kwargs"] = {"enable_thinking": thinking_requested}
+
+    return payload
