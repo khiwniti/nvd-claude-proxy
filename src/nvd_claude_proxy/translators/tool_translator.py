@@ -75,6 +75,11 @@ def anthropic_tools_to_openai(
     dropped_server: list[str] = []
     renamed: list[tuple[str, str]] = []
     skipped_nameless = 0
+    # Collision guard: tracks sanitized_name → first original_name that claimed it.
+    # When a collision is detected the later tool is dropped to avoid silently
+    # replacing the first tool's schema with a different one.
+    seen_sanitized: dict[str, str] = {}
+    collisions: list[tuple[str, str]] = []  # (duplicate_original, winner_original)
 
     for t in tools or []:
         if _is_server_tool(t):
@@ -82,7 +87,6 @@ def anthropic_tools_to_openai(
             continue
         ttype = t.get("type")
         if ttype is not None and ttype not in _PASSTHROUGH_TOOL_TYPES:
-            # Unknown tool-type — fall through but log.
             _log.debug("tools.unknown_type", type=ttype, name=t.get("name"))
         raw_name = t.get("name")
         if not raw_name:
@@ -93,6 +97,14 @@ def anthropic_tools_to_openai(
             renamed.append((raw_name, name))
             if tool_id_map is not None:
                 tool_id_map.register_tool_rename(raw_name, name)
+        # Collision detection: two distinct original names mapping to the same
+        # sanitized name would make tool_result matching ambiguous.
+        if name in seen_sanitized:
+            if seen_sanitized[name] != raw_name:
+                collisions.append((raw_name, seen_sanitized[name]))
+                continue  # Drop the later duplicate to preserve determinism.
+        else:
+            seen_sanitized[name] = raw_name
         desc = t.get("description", "") or ""
         if description_cap and len(desc) > description_cap:
             desc = truncate_description(desc, description_cap)
@@ -123,6 +135,11 @@ def anthropic_tools_to_openai(
         _log.debug("tools.names_sanitized", renames=renamed[:10], total=len(renamed))
     if skipped_nameless:
         _log.warning("tools.nameless_skipped", count=skipped_nameless)
+    if collisions:
+        _log.warning(
+            "tools.name_collision_dropped",
+            collisions=[{"dropped": d, "kept": k} for d, k in collisions],
+        )
     return out
 
 

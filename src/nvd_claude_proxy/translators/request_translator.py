@@ -244,7 +244,7 @@ def translate_request(
     # When a lot of tools are present, tighten per-description limits to keep
     # the prompt under the model's context window.
     mapped_tools: list[dict] = []
-    if (tools := anthropic_body.get("tools")) and spec.supports_tools:
+    if (tools := anthropic_body.get("tools")) and spec.tools.supports:
         tool_count = len(tools)
         if tool_count > 100:
             desc_cap = 160

@@ -33,7 +33,9 @@ def standard_response_headers(
     now = int(time.time())
     return {
         # Required by ALL official Anthropic SDKs — TypeScript SDK throws if absent.
-        "anthropic-version": "2024-01-01",
+        # Must match the stable API version string (2023-06-01); 2024-01-01 does
+        # not exist in Anthropic's versioning scheme and trips SDK validation checks.
+        "anthropic-version": "2023-06-01",
         "x-anthropic-type": "anthropic-api-response",
         "anthropic-request-id": request_id,
         "request-id": request_id,  # alias some SDKs read

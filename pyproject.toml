@@ -53,6 +53,8 @@ dev = [
   "ruff>=0.7",
   "mypy>=1.13",
   "respx>=0.22",
+  # Optional runtime dep exercised by tool_controller schema validation tests.
+  "jsonschema>=4.23",
 ]
 metrics = [
   "prometheus-client>=0.21",

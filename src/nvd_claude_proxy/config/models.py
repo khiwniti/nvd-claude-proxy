@@ -42,11 +42,15 @@ class CapabilityManifest:
     reasoning_style: ReasoningStyle = "none"
 
     def __post_init__(self):
-        # Migrate legacy kwargs to nested structures if not explicitly set
-        if not self.tools.supports and self.supports_tools:
-            self.tools.supports = self.supports_tools
-        if self.reasoning.style == "none" and self.supports_reasoning:
-            self.reasoning.style = self.reasoning_style
+        # Ensure legacy scalar fields mirror the canonical nested structures so
+        # any code reading spec.supports_reasoning / spec.reasoning_style gets
+        # correct values even if only the nested form was set by the loader.
+        if self.reasoning.style != "none" and not self.supports_reasoning:
+            self.supports_reasoning = True
+        if self.reasoning_style == "none" and self.reasoning.style != "none":
+            self.reasoning_style = self.reasoning.style  # type: ignore[assignment]
+        # Sync tools legacy field with nested ToolConfig.
+        self.supports_tools = self.tools.supports
 
 
 @dataclass(slots=True)

@@ -31,16 +31,6 @@ _log = structlog.get_logger("nvd_claude_proxy.messages")
 _PING_INTERVAL_SECONDS = 15.0
 
 
-async def heartbeat_producer(upstream_queue: asyncio.Queue) -> AsyncIterator[bytes]:
-    """Periodically emits pings while the upstream is working."""
-    while True:
-        try:
-            # Wait for the queue to be empty/done.
-            # (Note: simpler to just yield ping periodically)
-            await asyncio.sleep(_PING_INTERVAL_SECONDS)
-            yield encode_sse("ping", {"type": "ping"})
-        except asyncio.CancelledError:
-            return
 def _check_proxy_key(request: Request) -> None:
     s = request.app.state.settings
     if not s.proxy_api_key:
@@ -73,18 +63,18 @@ def _echo_stop_sequence(anthropic_body: dict, resp: dict) -> None:
     set `stop_sequence` on the Anthropic response so SDKs can detect it.
 
     NVIDIA/OpenAI finish_reason="stop" doesn't reveal *which* sequence matched.
-    We reconstruct by scanning all text content for any configured sequence,
-    preferring the one that appears latest (closest to where generation stopped).
+    We reconstruct by scanning the suffix of all text content — stop sequences
+    are always at or near the end of the generated text (never mid-sentence).
     """
     seqs = anthropic_body.get("stop_sequences") or []
     if not seqs or resp.get("stop_reason") != "end_turn":
         return
-    # Concatenate all text blocks into one searchable string.
     full_text = "".join(
         (b.get("text") or "")
         for b in (resp.get("content") or [])
         if b.get("type") == "text"
     )
+    # Prefer the stop sequence that appears latest (closest to end of output).
     best_pos = -1
     best_seq = None
     for s in seqs:
@@ -99,6 +89,15 @@ def _echo_stop_sequence(anthropic_body: dict, resp: dict) -> None:
         resp["stop_reason"] = "stop_sequence"
 
 
+def _build_tool_schemas(body: dict) -> dict[str, dict]:
+    """Build a name→schema map from the raw Anthropic request body for validation."""
+    return {
+        t["name"]: t.get("input_schema", {})
+        for t in (body.get("tools") or [])
+        if t.get("name")
+    }
+
+
 @router.post("/v1/messages")
 async def messages(request: Request):
     _check_proxy_key(request)
@@ -107,11 +106,12 @@ async def messages(request: Request):
     registry = request.app.state.model_registry
     settings = request.app.state.settings
     requested_model = body.get("model") or registry.default_big
-    # Resolve the full failover chain: primary + fallbacks.
     spec_chain = registry.resolve_chain(requested_model)
     spec = spec_chain[0]
     tool_id_map = ToolIdMap()
-    tool_controller = ToolInvocationController(spec, tool_id_map)
+    # Pass tool schemas so the controller can perform deterministic arg validation.
+    tool_schemas = _build_tool_schemas(body)
+    tool_controller = ToolInvocationController(spec, tool_id_map, tool_schemas=tool_schemas)
     try:
         payload = translate_request(body, spec, tool_id_map)
     except ContextOverflowError as exc:
@@ -161,8 +161,9 @@ async def messages(request: Request):
     client: NvidiaClient = request.app.state.nvidia_client
 
     if not stream:
-        # Non-streaming: walk the failover chain on 5xx.
+        # Non-streaming: walk the failover chain on 5xx / 429.
         t0 = time.monotonic()
+        resp = None
         for attempt_idx, try_spec in enumerate(spec_chain):
             if attempt_idx > 0:
                 tool_id_map = ToolIdMap()
@@ -197,6 +198,12 @@ async def messages(request: Request):
             return ORJSONResponse(anth, status_code=status, headers=err_headers)
         out = translate_response(resp.json(), requested_model, tool_id_map)
         _echo_stop_sequence(body, out)
+        # Validate tool args from non-streaming response against declared schemas.
+        failing_tools = tool_controller.validate_all(
+            [b for b in (out.get("content") or []) if b.get("type") == "tool_use"]
+        )
+        if failing_tools:
+            _log.warning("messages.tool_arg_validation_failed", tools=failing_tools)
         usage = out.get("usage") or {}
         in_tok = usage.get("input_tokens", 0)
         out_tok = usage.get("output_tokens", 0)
@@ -213,7 +220,7 @@ async def messages(request: Request):
         return ORJSONResponse(out, headers=std_headers)
 
     async def gen() -> AsyncIterator[bytes]:
-        """Multiplex upstream chunks with a heartbeat producer so SDKs never
+        """Multiplex upstream chunks with periodic ping events so SDKs never
         idle-timeout on a slow reasoning stream.
 
         Failover: if the first item from the upstream is a 5xx HTTPStatusError
@@ -271,7 +278,7 @@ async def messages(request: Request):
                         yield encode_sse("ping", {"type": "ping"})
                         first_item = await upstream_queue.get()
 
-                    # Failover status (5xx or 429) before first chunk → try next spec if available.
+                    # Failover status (5xx or 429) before first chunk.
                     if isinstance(first_item, tuple) and first_item[0] == "__error__":
                         exc = first_item[1]
                         is_failover_status = (
@@ -283,9 +290,9 @@ async def messages(request: Request):
                                 await asyncio.wait_for(upstream_queue.get(), timeout=5.0)
                             except asyncio.TimeoutError:
                                 pass
-                            continue  # outer for-loop: task cleaned up in finally
+                            continue  # outer for-loop
 
-                        # Final attempt or non-5xx error — emit error SSE.
+                        # Final attempt or non-retryable error — emit error SSE.
                         if isinstance(exc, httpx.HTTPStatusError):
                             try:
                                 upstream_body = exc.response.json()
@@ -294,6 +301,10 @@ async def messages(request: Request):
                             _, anth = openai_error_to_anthropic(
                                 exc.response.status_code, upstream_body
                             )
+                            # Propagate retry-after from NVIDIA 429 to client.
+                            if exc.response.status_code == 429:
+                                if ra := exc.response.headers.get("retry-after"):
+                                    anth.setdefault("error", {})["retry_after"] = ra
                         else:
                             _log.exception("stream.unhandled", err=str(exc))
                             anth = {
@@ -303,7 +314,7 @@ async def messages(request: Request):
                         yield encode_sse("error", anth)
                         return
 
-                    # Normal path: process first_item, then drain the queue.
+                    # Normal path: process first_item then drain the queue.
                     sentinel_seen = first_item is SENTINEL
                     if not sentinel_seen:
                         for ev in st.feed(first_item):
@@ -329,6 +340,9 @@ async def messages(request: Request):
                                 _, anth = openai_error_to_anthropic(
                                     exc.response.status_code, upstream_body
                                 )
+                                if exc.response.status_code == 429:
+                                    if ra := exc.response.headers.get("retry-after"):
+                                        anth.setdefault("error", {})["retry_after"] = ra
                             else:
                                 _log.exception("stream.unhandled", err=str(exc))
                                 anth = {
