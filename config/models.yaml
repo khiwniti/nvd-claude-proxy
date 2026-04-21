@@ -6,9 +6,9 @@ defaults:
   small: "claude-haiku-4-5"
 
 aliases:
-  # Flagship → Nemotron Ultra (best reasoning)
+  # Flagship → Nemotron-3 Ultra (Frontier reasoning)
   claude-opus-4-7:
-    nvidia_id: "nvidia/llama-3.1-nemotron-ultra-253b-v1"
+    nvidia_id: "nvidia/nemotron-3-ultra-500b-a50b"
     supports_tools: true
     supports_vision: false
     supports_reasoning: true
@@ -19,8 +19,9 @@ aliases:
       - "claude-sonnet-4-6"
       - "claude-haiku-4-5"
 
+  # Balanced → Nemotron-3 Super (120B MoE)
   claude-sonnet-4-6:
-    nvidia_id: "nvidia/llama-3.3-nemotron-super-49b-v1"
+    nvidia_id: "nvidia/nemotron-3-super-120b-a12b"
     supports_tools: true
     supports_vision: false
     supports_reasoning: true
@@ -30,8 +31,9 @@ aliases:
     failover_to:
       - "claude-haiku-4-5"
 
+  # Fast → Nemotron-3 Nano (30B MoE)
   claude-haiku-4-5:
-    nvidia_id: "nvidia/nvidia-nemotron-nano-9b-v2"
+    nvidia_id: "nvidia/nemotron-3-nano-30b-a3b"
     supports_tools: true
     supports_vision: false
     supports_reasoning: true

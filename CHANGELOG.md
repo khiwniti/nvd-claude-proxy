@@ -5,6 +5,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.4.1] — 2026-04-21
+
+### Added
+- **Tokeniser fallback** — added `approximate_tokens_fast` fallback that uses a simple character-based heuristic when `tiktoken` initialization fails (e.g. in restricted environments or during network issues). Prevents proxy crashes on startup.
+- **CI publish gating** — updated GitHub Actions to safely handle PyPI publishing when Trusted Publishers are not yet configured, falling back to API tokens if present.
+
+### Fixed
+- **Undeclared tool blocking** — improved safety by strictly blocking only tools that were NOT provided in the original Anthropic `tools` list. Legitimate tools with names like `Skill` or `Read` are no longer blocked if they are correctly declared in the session.
+- **Stream robustness** — hardened the SSE translator to better handle partial JSON fragments and malformed reasoning blocks from upstream models.
+- **Lint & Type safety** — comprehensive fix of `mypy` and `ruff` issues across core modules, CLI, and test suite.
+
+---
+
 ## [0.3.4] — 2026-04-20
 
 ### Fixed
