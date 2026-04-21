@@ -104,7 +104,6 @@ async def messages(request: Request):
     body = await request.json()
 
     registry = request.app.state.model_registry
-    settings = request.app.state.settings
     requested_model = body.get("model") or registry.default_big
     spec_chain = registry.resolve_chain(requested_model)
     spec = spec_chain[0]

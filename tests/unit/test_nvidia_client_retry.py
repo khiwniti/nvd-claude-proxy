@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import httpx
-import pytest
 
 from nvd_claude_proxy.clients.nvidia_client import NvidiaClient
 from nvd_claude_proxy.config.settings import Settings

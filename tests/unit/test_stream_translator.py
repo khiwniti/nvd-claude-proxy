@@ -4,7 +4,6 @@ from nvd_claude_proxy.translators.stream_translator import StreamTranslator
 from nvd_claude_proxy.translators.tool_translator import ToolIdMap
 from nvd_claude_proxy.translators.tool_controller import ToolInvocationController
 from nvd_claude_proxy.config.models import CapabilityManifest
-from unittest.mock import MagicMock
 
 
 def _collect(chunks, tool_schemas=None):
