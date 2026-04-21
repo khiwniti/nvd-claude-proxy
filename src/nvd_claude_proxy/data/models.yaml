@@ -4,41 +4,42 @@
 defaults:
   big: "claude-opus-4-7"
   small: "claude-opus-4-7"
-# Flagship → Nemotron-3 Ultra (Frontier reasoning)
-claude-opus-4-7:
-  nvidia_id: "nvidia/nemotron-3-ultra-500b-a50b"
-  supports_tools: true
-  supports_vision: false
-  supports_reasoning: true
-  reasoning_style: "detailed-thinking-v1"
-  max_context: 1000000
-  max_output: 16384
-  failover_to:
-    - "claude-sonnet-4-6"
-    - "claude-haiku-4-5"
 
-# Balanced → Nemotron-3 Super (120B MoE)
-claude-sonnet-4-6:
-  nvidia_id: "nvidia/nemotron-3-super-120b-a12b"
-  supports_tools: true
-  supports_vision: false
-  supports_reasoning: true
-  reasoning_style: "detailed-thinking-v1"
-  max_context: 1000000
-  max_output: 16384
-  failover_to:
-    - "claude-haiku-4-5"
+aliases:
+  # Flagship → Nemotron-3 Ultra (Frontier reasoning)
+  claude-opus-4-7:
+    nvidia_id: "nvidia/nemotron-3-ultra-500b-a50b"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: true
+    reasoning_style: "detailed-thinking-v1"
+    max_context: 1000000
+    max_output: 16384
+    failover_to:
+      - "claude-sonnet-4-6"
+      - "claude-haiku-4-5"
 
-# Fast → Nemotron-3 Nano (30B MoE)
-claude-haiku-4-5:
-  nvidia_id: "nvidia/nemotron-3-nano-30b-a3b"
-  supports_tools: true
-  supports_vision: false
-  supports_reasoning: true
-  reasoning_style: "slash-think"
-  max_context: 1000000
-  max_output: 16384
+  # Balanced → Nemotron-3 Super (120B MoE)
+  claude-sonnet-4-6:
+    nvidia_id: "nvidia/nemotron-3-super-120b-a12b"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: true
+    reasoning_style: "detailed-thinking-v1"
+    max_context: 1000000
+    max_output: 16384
+    failover_to:
+      - "claude-haiku-4-5"
 
+  # Fast → Nemotron-3 Nano (30B MoE)
+  claude-haiku-4-5:
+    nvidia_id: "nvidia/nemotron-3-nano-30b-a3b"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: true
+    reasoning_style: "slash-think"
+    max_context: 1000000
+    max_output: 16384
 
   # Vision-capable (Llama 4 Maverick)
   claude-opus-4-7-vision:
@@ -80,7 +81,7 @@ claude-haiku-4-5:
     max_context: 1000000
     max_output: 16384
 
-  # GLM-5-1
+  # GLM-5.1
   glm-5-1:
     nvidia_id: "z-ai/glm-5.1"
     supports_tools: true
