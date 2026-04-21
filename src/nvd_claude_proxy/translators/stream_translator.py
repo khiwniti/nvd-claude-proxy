@@ -46,10 +46,14 @@ from .tool_controller import ToolInvocationController
 from .tool_translator import ToolIdMap
 
 _FENCE_RE = re.compile(r"^```[a-z]*\s*", re.MULTILINE)
-# Matches the first JSON object/array start character.
+# Matches first JSON object/array start character.
 _JSON_START_RE = re.compile(r"[{\[]")
 
+# Detect hallucinated tag-based tool calling in text deltas.
+_TAG_HALLUCINATION_RE = re.compile(r"(command-name>|command-arguments>)", re.IGNORECASE)
+
 # Known hallucinated tools from training data mismatch — these do not exist
+
 # in the real Claude Code tool registry and cause infinite loops if allowed.
 _HALLUCINATED_TOOLS: frozenset[str] = frozenset({"Skill", "Read", "migrate", "status"})
 
@@ -350,6 +354,28 @@ class StreamTranslator:
 
         # 2) Text chunk.
         if text:
+            if _TAG_HALLUCINATION_RE.search(text):
+                yield from self._close_any_open()
+                yield from self._open_text_block()
+                yield self._emit(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": self._open_block_index,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": (
+                                "\n[PROXY: Detected malformed tag-based "
+                                "tool call — stopping generation]\n"
+                            ),
+                        },
+                    },
+                )
+                yield from self._close_open_text_or_thinking()
+                self._stop_reason = "end_turn"
+                self._finished = True
+                return
+
             if self._open_block_type != "text":
                 yield from self._close_any_open()
                 yield from self._open_text_block()

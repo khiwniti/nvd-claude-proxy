@@ -45,7 +45,7 @@ class ContextOverflowError(ValueError):
         )
 
 
-_TOOL_DISCIPLINE_ADDENDUM = """\n\n---\nTool use discipline (IMPORTANT):\n- Only call a tool when you are certain it is the correct tool for the task.\n- When calling the `Skill` tool, use the EXACT skill name shown in the tool description (e.g. \"/vercel:env\", not \"vercel\"). Do not guess skill names.\n- Provide ALL required parameters for every tool call. Check the tool schema before calling.\n- If you are unsure which tool to use, ask the user for clarification instead of guessing.\n- Do not call design or UI tools (e.g. `pencil`) for non-design tasks such as file migration or code editing.\n---"""
+_TOOL_DISCIPLINE_ADDENDUM = """\n\n---\nTool use discipline (IMPORTANT):\n- Only call a tool when you are certain it is the correct tool for the task.\n- ALWAYS use the native tool-calling API. NEVER output tags like `command-name>` or `command-arguments>` in your response.\n- When calling the `Skill` tool, use the EXACT skill name shown in the tool description (e.g. \"/vercel:env\", not \"vercel\"). Do not guess skill names.\n- Provide ALL required parameters for every tool call. Check the tool schema before calling.\n- If you are unsure which tool to use, ask the user for clarification instead of guessing.\n- Do not call design or UI tools (e.g. `pencil`) for non-design tasks such as file migration or code editing.\n---"""
 
 
 def _inject_tool_discipline(messages: list[dict]) -> None:
