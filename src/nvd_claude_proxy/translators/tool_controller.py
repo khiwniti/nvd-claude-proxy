@@ -1,4 +1,5 @@
 """Stateful controller for managing parallel tool invocation and result collection."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +15,7 @@ logger = structlog.get_logger(__name__)
 # skipped gracefully (arg_validation flag in ToolConfig has no effect).
 try:
     from jsonschema import Draft7Validator, ValidationError as _SchemaValidationError
+
     _HAS_JSONSCHEMA = True
 except ImportError:
     _HAS_JSONSCHEMA = False

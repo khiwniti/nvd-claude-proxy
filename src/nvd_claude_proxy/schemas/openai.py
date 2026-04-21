@@ -1,4 +1,5 @@
 """Minimal OpenAI chunk/response schemas for reference/testing."""
+
 from __future__ import annotations
 
 from typing import Any, Literal

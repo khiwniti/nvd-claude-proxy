@@ -8,6 +8,7 @@ official Python/TypeScript SDKs, including extended-thinking blocks, document
 blocks (PDF/URL/text sources), cache-control ephemeral blocks, and all
 tool-choice variants.
 """
+
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Union
@@ -17,11 +18,13 @@ from pydantic import BaseModel, Field
 
 # ── Cache control ──────────────────────────────────────────────────────────────
 
+
 class CacheControlEphemeral(BaseModel):
     type: Literal["ephemeral"] = "ephemeral"
 
 
 # ── Content block types ────────────────────────────────────────────────────────
+
 
 class TextBlock(BaseModel):
     type: Literal["text"] = "text"
@@ -47,6 +50,7 @@ class ImageBlock(BaseModel):
 
 
 # Document sources
+
 
 class DocumentSourceBase64(BaseModel):
     type: Literal["base64"] = "base64"
@@ -99,6 +103,7 @@ class ThinkingBlock(BaseModel):
 
 class RedactedThinkingBlock(BaseModel):
     """Emitted by Anthropic when extended thinking content is policy-redacted."""
+
     type: Literal["redacted_thinking"] = "redacted_thinking"
     data: str
 
@@ -119,6 +124,7 @@ ContentBlock = Annotated[
 
 # ── Thinking config ────────────────────────────────────────────────────────────
 
+
 class ThinkingConfigEnabled(BaseModel):
     type: Literal["enabled"] = "enabled"
     budget_tokens: int = Field(ge=1024)
@@ -133,6 +139,7 @@ ThinkingConfig = Union[ThinkingConfigEnabled, ThinkingConfigDisabled]
 
 # ── Tool definitions ───────────────────────────────────────────────────────────
 
+
 class Tool(BaseModel):
     name: str
     description: str | None = None
@@ -141,6 +148,7 @@ class Tool(BaseModel):
 
 
 # ── Tool choice variants ───────────────────────────────────────────────────────
+
 
 class ToolChoiceAuto(BaseModel):
     type: Literal["auto"] = "auto"
@@ -170,12 +178,14 @@ ToolChoice = Annotated[
 
 # ── Message types ──────────────────────────────────────────────────────────────
 
+
 class Message(BaseModel):
     role: Literal["user", "assistant"]
     content: str | list[dict[str, Any]]
 
 
 # ── Request / Response ─────────────────────────────────────────────────────────
+
 
 class MessagesRequest(BaseModel):
     model: str

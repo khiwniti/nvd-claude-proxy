@@ -21,6 +21,4 @@ async def count_tokens(request: Request) -> ORJSONResponse:
     }
     n = approximate_tokens(est_body)
     rid = new_request_id()
-    return ORJSONResponse(
-        {"input_tokens": n}, headers=standard_response_headers(rid)
-    )
+    return ORJSONResponse({"input_tokens": n}, headers=standard_response_headers(rid))

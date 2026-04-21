@@ -1,4 +1,5 @@
 """Tool schema + tool_choice + id-map helpers."""
+
 from __future__ import annotations
 
 import re

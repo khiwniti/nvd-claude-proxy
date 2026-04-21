@@ -142,14 +142,10 @@ def test_many_tools_get_description_cap_applied():
         "max_tokens": 32000,
         "tools": tools,
     }
-    out = translate_request(
-        body, _spec(max_context=131072, max_output=32768), ToolIdMap()
-    )
+    out = translate_request(body, _spec(max_context=131072, max_output=32768), ToolIdMap())
     # With >100 tools, description cap drops to 160 chars (see
     # request_translator sizing tiers).
-    assert all(
-        len(t["function"]["description"]) <= 161 for t in out["tools"]
-    )
+    assert all(len(t["function"]["description"]) <= 161 for t in out["tools"])
     # All 190 tools still forwarded; none silently dropped.
     assert len(out["tools"]) == 190
 
@@ -180,12 +176,11 @@ def test_init_like_payload_clamps_below_window():
         "messages": [{"role": "user", "content": "hi"}],
         "tools": tools,
     }
-    out = translate_request(
-        body, _spec(max_context=131072, max_output=32768), ToolIdMap()
-    )
+    out = translate_request(body, _spec(max_context=131072, max_output=32768), ToolIdMap())
     # If the estimator is honest the clamp should fire: input+max_tokens must
     # never exceed max_context - headroom (8192).
     from nvd_claude_proxy.util.tokens import approximate_tokens
+
     est = approximate_tokens({"messages": out["messages"], "tools": out["tools"]})
     assert est + out["max_tokens"] <= 131072 - 8192 + out["max_tokens"]  # sanity
     # Main invariant:
@@ -211,9 +206,7 @@ def test_max_tokens_clamps_when_tools_overflow_small_context():
     }
     # Force a window large enough for the heuristic: 190 tools + desc
     # ends up being ~20k tokens with the 3.0 chars/token heuristic.
-    out = translate_request(
-        body, _spec(max_context=32768, max_output=32768), ToolIdMap()
-    )
+    out = translate_request(body, _spec(max_context=32768, max_output=32768), ToolIdMap())
     assert out["max_tokens"] < 32000
     assert out["max_tokens"] >= 256
 

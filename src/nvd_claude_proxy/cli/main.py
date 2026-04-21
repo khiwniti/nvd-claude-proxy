@@ -11,6 +11,7 @@ Primary usage:
     ncp status                  # check whether a proxy is running on the port
     ncp init                    # interactively create a .env file
 """
+
 from __future__ import annotations
 
 import os
@@ -44,6 +45,7 @@ err_console = Console(stderr=True)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+
 
 def _base_url(host: str, port: int) -> str:
     return f"http://{host}:{port}"
@@ -84,8 +86,7 @@ def _load_settings():
     # Key is missing — prompt the user and offer to save it.
     console.print(
         Panel(
-            "Get a [bold]free[/bold] key (no credit card) at "
-            "[cyan]https://build.nvidia.com[/cyan]",
+            "Get a [bold]free[/bold] key (no credit card) at [cyan]https://build.nvidia.com[/cyan]",
             title="[yellow]NVIDIA_API_KEY not set[/yellow]",
             border_style="yellow",
         )
@@ -121,7 +122,8 @@ def _save_api_key(api_key: str) -> None:
     lines: list[str] = []
     if env_path.exists():
         lines = [
-            line for line in env_path.read_text().splitlines()
+            line
+            for line in env_path.read_text().splitlines()
             if not line.startswith("NVIDIA_API_KEY=")
         ]
     lines.insert(0, f"NVIDIA_API_KEY={api_key}")
@@ -132,6 +134,7 @@ def _save_api_key(api_key: str) -> None:
 def _load_registry(settings=None):
     import warnings
     from ..config.models import load_model_registry
+
     path = settings.model_config_path if settings else None
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
@@ -180,6 +183,7 @@ def _startup_banner(host: str, port: int, registry) -> None:
 
 # ── ncp  (default: start proxy + claude) ──────────────────────────────────────
 
+
 @app.callback()
 def _root(ctx: typer.Context) -> None:
     """NVIDIA Claude Proxy — run Claude Code on NVIDIA NIM."""
@@ -189,15 +193,26 @@ def _root(ctx: typer.Context) -> None:
 def code(
     model: str = typer.Option(
         None,
-        "--model", "-m",
+        "--model",
+        "-m",
         help="Claude model alias to pass as ANTHROPIC_MODEL.",
     ),
     port: int = typer.Option(None, "--port", "-p", help="Proxy port (overrides PROXY_PORT)."),
     host: str = typer.Option(None, "--host", help="Bind host (overrides PROXY_HOST)."),
-    no_claude: bool = typer.Option(False, "--no-claude", help="Start proxy only, don't launch claude."),
-    claude_args: str = typer.Option("", "--claude-args", help='Extra args passed to claude, e.g. "--dangerously-skip-permissions".'),
-    api_key: str = typer.Option(None, "--api-key", "-k", help="NVIDIA API key (nvapi-…). Overrides NVIDIA_API_KEY env var."),
-    update_claude: bool = typer.Option(False, "--update-claude", help="Run npm update on claude-code before launching."),
+    no_claude: bool = typer.Option(
+        False, "--no-claude", help="Start proxy only, don't launch claude."
+    ),
+    claude_args: str = typer.Option(
+        "",
+        "--claude-args",
+        help='Extra args passed to claude, e.g. "--dangerously-skip-permissions".',
+    ),
+    api_key: str = typer.Option(
+        None, "--api-key", "-k", help="NVIDIA API key (nvapi-…). Overrides NVIDIA_API_KEY env var."
+    ),
+    update_claude: bool = typer.Option(
+        False, "--update-claude", help="Run npm update on claude-code before launching."
+    ),
 ) -> None:
     """Start the proxy then launch [bold]claude[/bold] automatically.
 
@@ -315,9 +330,7 @@ def _run_proxy_and_claude(
     # Set output token limit to the model's max_output so Claude Code never
     # hits "response exceeded maximum" errors on long tool outputs.
     primary_spec = registry.resolve(model)
-    claude_env.setdefault(
-        "CLAUDE_CODE_MAX_OUTPUT_TOKENS", str(primary_spec.max_output)
-    )
+    claude_env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", str(primary_spec.max_output))
 
     claude_cmd = [claude_bin, *claude_extra_args]
     console.print(f"[dim]Launching:[/dim] [cyan]{' '.join(claude_cmd)}[/cyan]\n")
@@ -364,9 +377,7 @@ def _ensure_claude(*, update: bool = False) -> str | None:
         )
         action = "install"
     else:
-        console.print(
-            "[dim]Checking for [bold]@anthropic-ai/claude-code[/bold] updates …[/dim]"
-        )
+        console.print("[dim]Checking for [bold]@anthropic-ai/claude-code[/bold] updates …[/dim]")
         action = "install"  # npm install -g always upgrades to latest
 
     try:
@@ -379,7 +390,9 @@ def _ensure_claude(*, update: bool = False) -> str | None:
         if result.returncode == 0:
             new_path = shutil.which("claude")
             if new_path:
-                console.print(f"[green]✓[/green] claude installed/updated at [cyan]{new_path}[/cyan]")
+                console.print(
+                    f"[green]✓[/green] claude installed/updated at [cyan]{new_path}[/cyan]"
+                )
                 return new_path
             # PATH may not include npm global bin yet — try common locations
             for candidate in _npm_global_bin_candidates():
@@ -393,9 +406,7 @@ def _ensure_claude(*, update: bool = False) -> str | None:
             )
             return None
         else:
-            err_console.print(
-                f"[red]✗[/red]  npm {action} failed:\n{result.stderr.strip()}"
-            )
+            err_console.print(f"[red]✗[/red]  npm {action} failed:\n{result.stderr.strip()}")
             return claude  # return existing if we had one
     except subprocess.TimeoutExpired:
         err_console.print("[red]✗[/red]  npm timed out after 120 s.")
@@ -429,11 +440,14 @@ def _npm_global_bin_candidates() -> list["Path"]:
 
 # ── ncp proxy ─────────────────────────────────────────────────────────────────
 
+
 @app.command()
 def proxy(
     port: int = typer.Option(None, "--port", "-p"),
     host: str = typer.Option(None, "--host"),
-    api_key: str = typer.Option(None, "--api-key", "-k", help="NVIDIA API key (nvapi-…). Overrides NVIDIA_API_KEY env var."),
+    api_key: str = typer.Option(
+        None, "--api-key", "-k", help="NVIDIA API key (nvapi-…). Overrides NVIDIA_API_KEY env var."
+    ),
 ) -> None:
     """Start the proxy server only (no [bold]claude[/bold])."""
     if api_key:
@@ -452,6 +466,7 @@ def proxy(
 
 
 # ── ncp status ────────────────────────────────────────────────────────────────
+
 
 @app.command()
 def status(
@@ -482,6 +497,7 @@ def status(
 
 
 # ── ncp models list ───────────────────────────────────────────────────────────
+
 
 @models_app.command("list")
 def models_list() -> None:
@@ -523,6 +539,7 @@ def models_list() -> None:
 
 # ── ncp models show ───────────────────────────────────────────────────────────
 
+
 @models_app.command("show")
 def models_show(alias: str = typer.Argument(..., help="Model alias to inspect.")) -> None:
     """Show full configuration for a single model alias."""
@@ -547,7 +564,10 @@ def models_show(alias: str = typer.Argument(..., help="Model alias to inspect.")
         ("Reasoning style", spec.reasoning_style),
         ("Max context tokens", f"{spec.max_context:,}"),
         ("Max output tokens", f"{spec.max_output:,}"),
-        ("Temperature override", str(spec.temperature_override) if spec.temperature_override else "–"),
+        (
+            "Temperature override",
+            str(spec.temperature_override) if spec.temperature_override else "–",
+        ),
         ("Failover chain", ", ".join(spec.failover_to) if spec.failover_to else "–"),
     ]
 
@@ -557,12 +577,11 @@ def models_show(alias: str = typer.Argument(..., help="Model alias to inspect.")
     for k, v in rows:
         tbl.add_row(k, v)
 
-    console.print(
-        Panel(tbl, title=f"[bold cyan]{spec.alias}[/bold cyan]", border_style="cyan")
-    )
+    console.print(Panel(tbl, title=f"[bold cyan]{spec.alias}[/bold cyan]", border_style="cyan"))
 
 
 # ── ncp config ────────────────────────────────────────────────────────────────
+
 
 @app.command()
 def config() -> None:
@@ -586,8 +605,15 @@ def config() -> None:
         ("MODEL_CONFIG_PATH", settings.model_config_path),
         ("REQUEST_TIMEOUT_SECONDS", str(settings.request_timeout_seconds)),
         ("MAX_RETRIES", str(settings.max_retries)),
-        ("RATE_LIMIT_RPM", str(settings.rate_limit_rpm) + (" (disabled)" if settings.rate_limit_rpm == 0 else "")),
-        ("MAX_REQUEST_BODY_MB", str(settings.max_request_body_mb) + (" (disabled)" if settings.max_request_body_mb == 0 else "")),
+        (
+            "RATE_LIMIT_RPM",
+            str(settings.rate_limit_rpm) + (" (disabled)" if settings.rate_limit_rpm == 0 else ""),
+        ),
+        (
+            "MAX_REQUEST_BODY_MB",
+            str(settings.max_request_body_mb)
+            + (" (disabled)" if settings.max_request_body_mb == 0 else ""),
+        ),
     ]
     for k, v in rows:
         tbl.add_row(k, v)
@@ -596,6 +622,7 @@ def config() -> None:
 
 
 # ── ncp test ──────────────────────────────────────────────────────────────────
+
 
 @app.command()
 def test(
@@ -653,13 +680,14 @@ def test(
         Panel(
             text or "[dim](no text content)[/dim]",
             title=f"[green]✓ HTTP 200[/green]  stop=[bold]{body.get('stop_reason', '?')}[/bold]"
-                  f"  in={usage.get('input_tokens','?')} out={usage.get('output_tokens','?')}",
+            f"  in={usage.get('input_tokens', '?')} out={usage.get('output_tokens', '?')}",
             border_style="green",
         )
     )
 
 
 # ── ncp init ──────────────────────────────────────────────────────────────────
+
 
 @app.command()
 def init(
@@ -689,9 +717,7 @@ def init(
 
     port = typer.prompt("Proxy port", default="8788")
     host = typer.prompt("Bind host (127.0.0.1 = local only, 0.0.0.0 = all)", default="127.0.0.1")
-    proxy_key = typer.prompt(
-        "Proxy API key (leave blank = no auth)", default="", hide_input=True
-    )
+    proxy_key = typer.prompt("Proxy API key (leave blank = no auth)", default="", hide_input=True)
     log_level = typer.prompt("Log level", default="INFO")
 
     lines = [
@@ -716,6 +742,7 @@ def init(
 
 # ── ncp kill ──────────────────────────────────────────────────────────────────
 
+
 @app.command()
 def kill(
     port: int = typer.Option(None, "--port", "-p"),
@@ -729,10 +756,12 @@ def kill(
 
     try:
         import subprocess as _sp
+
         # lsof works on macOS/Linux; find PIDs listening on TCP port
         result = _sp.run(
             ["lsof", "-ti", f"tcp:{effective_port}"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         pids = [p.strip() for p in result.stdout.splitlines() if p.strip()]
         if not pids:
@@ -751,6 +780,7 @@ def kill(
 
 # ── version ───────────────────────────────────────────────────────────────────
 
+
 @app.command()
 def version() -> None:
     """Print version and exit."""
@@ -758,6 +788,7 @@ def version() -> None:
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
+
 
 def main() -> None:
     app()

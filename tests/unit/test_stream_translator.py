@@ -13,7 +13,9 @@ def _collect(chunks, tool_schemas=None):
         ToolIdMap(),
         tool_schemas=tool_schemas or {},
     )
-    st = StreamTranslator(model_name="claude-opus-4-7", tool_id_map=ToolIdMap(), tool_controller=tool_controller)
+    st = StreamTranslator(
+        model_name="claude-opus-4-7", tool_id_map=ToolIdMap(), tool_controller=tool_controller
+    )
     events = []
     for c in chunks:
         events.extend(st.feed(c))
@@ -23,7 +25,11 @@ def _collect(chunks, tool_schemas=None):
 
 def test_pure_text_stream():
     chunks = [
-        {"choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]},
+        {
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}
+            ]
+        },
         {"choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}]},
         {"choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": None}]},
         {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
@@ -34,33 +40,71 @@ def test_pure_text_stream():
     assert names[0] == "message_start"
     assert names[-2:] == ["message_delta", "message_stop"]
     assert any(
-        e["event"] == "content_block_delta"
-        and e["data"]["delta"]["type"] == "text_delta"
+        e["event"] == "content_block_delta" and e["data"]["delta"]["type"] == "text_delta"
         for e in events
     )
 
 
 def test_reasoning_then_text_then_tool_call():
     chunks = [
-        {"choices": [{"index": 0, "delta": {"reasoning_content": "Let me think…"}, "finish_reason": None}]},
-        {"choices": [{"index": 0, "delta": {"content": "Sure, I'll check."}, "finish_reason": None}]},
-        {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": ""}}]}, "finish_reason": None}]},
-        {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"loc\":"}}]}, "finish_reason": None}]},
-        {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "\"SF\"}"}}]}, "finish_reason": None}]},
+        {
+            "choices": [
+                {"index": 0, "delta": {"reasoning_content": "Let me think…"}, "finish_reason": None}
+            ]
+        },
+        {
+            "choices": [
+                {"index": 0, "delta": {"content": "Sure, I'll check."}, "finish_reason": None}
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": ""},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"loc":'}}]},
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"SF"}'}}]},
+                    "finish_reason": None,
+                }
+            ]
+        },
         {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
         {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 7}},
     ]
     events = _collect(chunks)
     types_opened = [
-        e["data"]["content_block"]["type"]
-        for e in events
-        if e["event"] == "content_block_start"
+        e["data"]["content_block"]["type"] for e in events if e["event"] == "content_block_start"
     ]
     assert types_opened == ["thinking", "text", "tool_use"]
     tool_start = next(
-        e for e in events
-        if e["event"] == "content_block_start"
-        and e["data"]["content_block"]["type"] == "tool_use"
+        e
+        for e in events
+        if e["event"] == "content_block_start" and e["data"]["content_block"]["type"] == "tool_use"
     )
     assert tool_start["data"]["content_block"]["name"] == "get_weather"
     mdelta = next(e for e in events if e["event"] == "message_delta")
@@ -73,9 +117,34 @@ def test_tool_args_before_id_are_buffered():
     id and name are present."""
     chunks = [
         # id+name arrive with empty args
-        {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_x", "type": "function", "function": {"name": "do_thing", "arguments": ""}}]}, "finish_reason": None}]},
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_x",
+                                "type": "function",
+                                "function": {"name": "do_thing", "arguments": ""},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
         # args fragment
-        {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\"a\":1}"}}]}, "finish_reason": None}]},
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"a":1}'}}]},
+                    "finish_reason": None,
+                }
+            ]
+        },
         {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
         {"choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 2}},
     ]
@@ -84,9 +153,9 @@ def test_tool_args_before_id_are_buffered():
     assert len(starts) == 1
     assert starts[0]["data"]["content_block"]["name"] == "do_thing"
     deltas = [
-        e for e in events
-        if e["event"] == "content_block_delta"
-        and e["data"]["delta"]["type"] == "input_json_delta"
+        e
+        for e in events
+        if e["event"] == "content_block_delta" and e["data"]["delta"]["type"] == "input_json_delta"
     ]
     joined = "".join(d["data"]["delta"]["partial_json"] for d in deltas)
     assert joined == '{"a":1}'
@@ -94,10 +163,30 @@ def test_tool_args_before_id_are_buffered():
 
 def test_parallel_tool_calls_serialized_into_blocks():
     chunks = [
-        {"choices": [{"index": 0, "delta": {"tool_calls": [
-            {"index": 0, "id": "call_a", "type": "function", "function": {"name": "f", "arguments": "{}"}},
-            {"index": 1, "id": "call_b", "type": "function", "function": {"name": "g", "arguments": "{}"}},
-        ]}, "finish_reason": None}]},
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_a",
+                                "type": "function",
+                                "function": {"name": "f", "arguments": "{}"},
+                            },
+                            {
+                                "index": 1,
+                                "id": "call_b",
+                                "type": "function",
+                                "function": {"name": "g", "arguments": "{}"},
+                            },
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
         {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
         {"choices": [], "usage": {"prompt_tokens": 4, "completion_tokens": 4}},
     ]
@@ -105,15 +194,18 @@ def test_parallel_tool_calls_serialized_into_blocks():
     names = [
         e["data"]["content_block"]["name"]
         for e in events
-        if e["event"] == "content_block_start"
-        and e["data"]["content_block"]["type"] == "tool_use"
+        if e["event"] == "content_block_start" and e["data"]["content_block"]["type"] == "tool_use"
     ]
     assert names == ["f", "g"]
 
 
 def test_thinking_block_emits_signature_before_stop():
     chunks = [
-        {"choices": [{"index": 0, "delta": {"reasoning_content": "reason"}, "finish_reason": None}]},
+        {
+            "choices": [
+                {"index": 0, "delta": {"reasoning_content": "reason"}, "finish_reason": None}
+            ]
+        },
         {"choices": [{"index": 0, "delta": {"content": "answer"}, "finish_reason": None}]},
         {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
         {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 2}},
@@ -122,12 +214,13 @@ def test_thinking_block_emits_signature_before_stop():
     # Find the signature_delta; it must precede the content_block_stop for the
     # thinking block (index 0).
     sig_idx = next(
-        i for i, e in enumerate(events)
-        if e["event"] == "content_block_delta"
-        and e["data"]["delta"]["type"] == "signature_delta"
+        i
+        for i, e in enumerate(events)
+        if e["event"] == "content_block_delta" and e["data"]["delta"]["type"] == "signature_delta"
     )
     stop_idx = next(
-        i for i, e in enumerate(events)
+        i
+        for i, e in enumerate(events)
         if e["event"] == "content_block_stop" and e["data"]["index"] == 0
     )
     assert sig_idx < stop_idx
@@ -135,15 +228,35 @@ def test_thinking_block_emits_signature_before_stop():
 
 def test_declared_skill_tool_is_not_blocked():
     chunks = [
-        {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_skill", "type": "function", "function": {"name": "Skill", "arguments": "{\"skill_name\":\"/vercel:env\"}"}}]}, "finish_reason": None}]},
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_skill",
+                                "type": "function",
+                                "function": {
+                                    "name": "Skill",
+                                    "arguments": '{"skill_name":"/vercel:env"}',
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
         {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
         {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 2}},
     ]
     events = _collect(chunks, tool_schemas={"Skill": {"type": "object", "properties": {}}})
     starts = [
-        e for e in events
-        if e["event"] == "content_block_start"
-        and e["data"]["content_block"]["type"] == "tool_use"
+        e
+        for e in events
+        if e["event"] == "content_block_start" and e["data"]["content_block"]["type"] == "tool_use"
     ]
     assert len(starts) == 1
     assert starts[0]["data"]["content_block"]["name"] == "Skill"
@@ -157,7 +270,24 @@ def test_declared_skill_tool_is_not_blocked():
 
 def test_undeclared_tool_is_blocked():
     chunks = [
-        {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_ghost", "type": "function", "function": {"name": "GhostTool", "arguments": "{\"x\":1}"}}]}, "finish_reason": None}]},
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_ghost",
+                                "type": "function",
+                                "function": {"name": "GhostTool", "arguments": '{"x":1}'},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
         {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
         {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 2}},
     ]

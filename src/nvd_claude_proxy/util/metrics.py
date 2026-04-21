@@ -9,6 +9,7 @@ Usage::
 
 Noop stubs are provided when the library is absent.
 """
+
 from __future__ import annotations
 
 import logging
@@ -42,9 +43,7 @@ try:
     _ENABLED = True
 
     def inc_requests(model: str, stream: bool, status: int) -> None:
-        _requests_total.labels(
-            model=model, stream=str(stream).lower(), status=str(status)
-        ).inc()
+        _requests_total.labels(model=model, stream=str(stream).lower(), status=str(status)).inc()
 
     def inc_tokens(model: str, input_tokens: int, output_tokens: int) -> None:
         if input_tokens:

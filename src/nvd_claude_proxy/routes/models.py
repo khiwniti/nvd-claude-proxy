@@ -63,9 +63,7 @@ async def get_model(model_id: str, request: Request) -> ORJSONResponse:
     rid = new_request_id()
     headers = standard_response_headers(rid)
     if model_id in registry.specs:
-        return ORJSONResponse(
-            _model_dict(model_id, registry.specs[model_id]), headers=headers
-        )
+        return ORJSONResponse(_model_dict(model_id, registry.specs[model_id]), headers=headers)
     try:
         spec = registry.resolve(model_id)
     except Exception:

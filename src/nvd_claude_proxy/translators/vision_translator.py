@@ -2,6 +2,7 @@
 
 NVIDIA VLMs accept JPG/PNG only; GIF/WEBP must be transcoded to PNG.
 """
+
 from __future__ import annotations
 
 import base64
@@ -44,7 +45,5 @@ def anthropic_image_to_openai(block: dict) -> dict:
             "image_url": {"url": f"data:{media_type};base64,{data_b64}"},
         }
     if stype == "file":
-        raise ValueError(
-            "Anthropic Files-API image source is not supported; send base64 or URL."
-        )
+        raise ValueError("Anthropic Files-API image source is not supported; send base64 or URL.")
     raise ValueError(f"Unknown image source type: {stype!r}")

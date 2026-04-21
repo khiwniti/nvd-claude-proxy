@@ -23,6 +23,7 @@ We convert this into a text block whose text is:
     [Document: <title>]
     <extracted text>
 """
+
 from __future__ import annotations
 
 import base64
