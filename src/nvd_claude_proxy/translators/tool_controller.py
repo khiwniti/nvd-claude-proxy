@@ -96,6 +96,14 @@ class ToolInvocationController:
                 failing.append(name)
         return failing
 
+    def has_tool_schema(self, name: str) -> bool:
+        """Return True when a tool name exists in the declared request schema map."""
+        return name in self._tool_schemas
+
+    def has_registered_schemas(self) -> bool:
+        """Return True when request tool schemas were provided."""
+        return bool(self._tool_schemas)
+
     # ── parallel dispatch (proxy-local, future use) ───────────────────────
 
     async def invoke_parallel(self, calls: list[dict[str, Any]]) -> None:

@@ -57,7 +57,7 @@ def extract_pdf_text(b64_data: str) -> str:
                 parts.append(text)
         return "\n\n".join(parts) if parts else "[PDF document — no extractable text]"
     except Exception as exc:
-        _log.warning("pdf.extraction_failed", error=str(exc))
+        _log.warning("pdf.extraction_failed: %s", exc)
         return f"[PDF document — extraction failed: {exc}]"
 
 

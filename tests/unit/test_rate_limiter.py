@@ -1,7 +1,6 @@
 """Tests for per-client rate limiter and body size limit."""
 from __future__ import annotations
 
-import pytest
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from fastapi.testclient import TestClient

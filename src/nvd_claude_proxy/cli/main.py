@@ -19,7 +19,6 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 import httpx
 import typer
@@ -27,7 +26,6 @@ from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
 from .._version import __version__
 
@@ -122,7 +120,10 @@ def _save_api_key(api_key: str) -> None:
     # Merge with existing file if present.
     lines: list[str] = []
     if env_path.exists():
-        lines = [l for l in env_path.read_text().splitlines() if not l.startswith("NVIDIA_API_KEY=")]
+        lines = [
+            line for line in env_path.read_text().splitlines()
+            if not line.startswith("NVIDIA_API_KEY=")
+        ]
     lines.insert(0, f"NVIDIA_API_KEY={api_key}")
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     console.print(f"[green]✓[/green] Key saved to [dim]{env_path}[/dim]")
@@ -296,7 +297,10 @@ def _run_proxy_and_claude(
         )
         console.print("[green]Proxy running.[/green]  Press [bold]Ctrl+C[/bold] to stop.\n")
         try:
-            proxy_proc.wait()
+            if proxy_proc:
+                proxy_proc.wait()
+            else:
+                signal.pause()
         except KeyboardInterrupt:
             pass
         finally:
@@ -473,7 +477,7 @@ def status(
             console.print(f"[yellow]● Unexpected status {r.status_code}[/yellow]  {base}")
     except Exception:
         console.print(f"[red]● Proxy is DOWN[/red]  {base}")
-        console.print(f"  Run [cyan]ncp proxy[/cyan] or [cyan]ncp[/cyan] to start it.")
+        console.print("  Run [cyan]ncp proxy[/cyan] or [cyan]ncp[/cyan] to start it.")
         raise typer.Exit(1)
 
 
@@ -704,9 +708,9 @@ def init(
     console.print(f"\n[green]✓[/green] Written [bold]{env_path}[/bold]")
     console.print(
         "\nStart the proxy:\n"
-        f"  [cyan]ncp[/cyan]                  # start proxy + claude\n"
-        f"  [cyan]ncp proxy[/cyan]            # proxy only\n"
-        f"  [cyan]ncp models list[/cyan]      # show model aliases\n"
+        "  [cyan]ncp[/cyan]                  # start proxy + claude\n"
+        "  [cyan]ncp proxy[/cyan]            # proxy only\n"
+        "  [cyan]ncp models list[/cyan]      # show model aliases\n"
     )
 
 

@@ -104,7 +104,6 @@ async def messages(request: Request):
     body = await request.json()
 
     registry = request.app.state.model_registry
-    settings = request.app.state.settings
     requested_model = body.get("model") or registry.default_big
     spec_chain = registry.resolve_chain(requested_model)
     spec = spec_chain[0]
@@ -183,6 +182,8 @@ async def messages(request: Request):
             if (resp.status_code >= 500 or resp.status_code == 429) and attempt_idx < len(spec_chain) - 1:
                 continue
             break
+        if resp is None:
+            raise RuntimeError("No upstream response received from NVIDIA API")
         elapsed = time.monotonic() - t0
         observe_duration(requested_model, elapsed)
         if resp.status_code >= 400:
@@ -317,8 +318,9 @@ async def messages(request: Request):
                     # Normal path: process first_item then drain the queue.
                     sentinel_seen = first_item is SENTINEL
                     if not sentinel_seen:
-                        for ev in st.feed(first_item):
-                            yield encode_sse(ev["event"], ev["data"])
+                        if isinstance(first_item, dict):
+                            for ev in st.feed(first_item):
+                                yield encode_sse(ev["event"], ev["data"])
 
                     while not sentinel_seen:
                         try:
@@ -352,8 +354,9 @@ async def messages(request: Request):
                             yield encode_sse("error", anth)
                             return
                         else:
-                            for ev in st.feed(item):
-                                yield encode_sse(ev["event"], ev["data"])
+                            if isinstance(item, dict):
+                                for ev in st.feed(item):
+                                    yield encode_sse(ev["event"], ev["data"])
 
                     for ev in st.finalize():
                         yield encode_sse(ev["event"], ev["data"])

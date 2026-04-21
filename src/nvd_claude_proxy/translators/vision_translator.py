@@ -13,7 +13,7 @@ _SUPPORTED_NIM = {"image/jpeg", "image/png"}
 
 
 def _transcode_to_png(raw: bytes) -> bytes:
-    img = Image.open(io.BytesIO(raw))
+    img: Image.Image = Image.open(io.BytesIO(raw))
     # Flatten transparency to a white background so the PNG stays JPEG-safe
     # even if a downstream component re-encodes it.
     if img.mode in ("RGBA", "LA", "P"):

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 ReasoningStyle = Literal[
     "detailed-thinking-v1", "slash-think", "qwen-kwargs", "always-on", "none"
