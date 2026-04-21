@@ -289,6 +289,8 @@ class StreamTranslator:
 
     def feed(self, openai_chunk: dict) -> Iterator[dict]:
         """Consume one OpenAI chunk and yield zero or more Anthropic events."""
+        if self._finished:
+            return
         yield from self._ensure_started()
 
         # Trailing usage-only chunk (`choices == []`).
@@ -372,8 +374,6 @@ class StreamTranslator:
             new_args = fn.get("arguments") or ""
 
             # DEFENSIVE: Detect hallucinated tools that don't exist in registry.
-            # These occur when the model confuses training data with actual tool
-            # schemas, leading to infinite loops with fake "Skill"/"Read" calls.
             if buf.name in _HALLUCINATED_TOOLS:
                 if self._open_block_type != "text":
                     yield from self._close_any_open()
@@ -412,6 +412,39 @@ class StreamTranslator:
                 self._open_block_type = "tool_use"
                 self._open_block_index = buf.anth_index
                 buf.started = True
+                
+                # REPETITION DETECTION: ONLY check when tool call FIRST starts.
+                self._last_tool_names.append(buf.name)
+                if len(self._last_tool_names) > 10:
+                    self._last_tool_names.pop(0)
+                
+                if len(self._last_tool_names) >= 4:
+                    unique = set(self._last_tool_names[-6:])
+                    recent_count = self._last_tool_names[-6:].count(buf.name)
+                    if len(unique) <= 2 and recent_count >= 4:
+                        self._repetition_count += 1
+                        if self._repetition_count >= self._MAX_REPETITIONS:
+                            yield from self._close_any_open()
+                            yield from self._open_text_block()
+                            yield self._emit(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": self._open_block_index,
+                                    "delta": {
+                                        "type": "text_delta",
+                                        "text": (
+                                            "\n[PROXY: Detected infinite tool-use "
+                                            "loop — stopping generation]\n"
+                                        ),
+                                    },
+                                },
+                            )
+                            yield from self._close_open_text_or_thinking()
+                            self._stop_reason = "end_turn"
+                            self._finished = True
+                            return
+
                 emit_name = self.tool_id_map.original_tool_name(buf.name or "")
                 yield self._emit(
                     "content_block_start",
@@ -447,42 +480,6 @@ class StreamTranslator:
                 # id/name haven't arrived yet — keep buffering.
                 buf.pre_start_buffer += new_args
 
-            # Track tool names for repetition/infinite-loop detection.
-            if buf.name and buf.started:
-                self._last_tool_names.append(buf.name)
-                if len(self._last_tool_names) > 10:
-                    self._last_tool_names.pop(0)
-                # Detect a tight repetition pattern: ≤2 unique tools making up
-                # ≥4 of the last entries → likely stuck in a loop.
-                if len(self._last_tool_names) >= 4:
-                    unique = set(self._last_tool_names[-6:])
-                    recent_count = self._last_tool_names[-6:].count(buf.name)
-                    if len(unique) <= 2 and recent_count >= 4:
-                        self._repetition_count += 1
-                        if self._repetition_count >= self._MAX_REPETITIONS:
-                            # Force-stop: close any open block, open a fresh text
-                            # block for the warning so the delta has a valid index.
-                            yield from self._close_any_open()
-                            yield from self._open_text_block()
-                            yield self._emit(
-                                "content_block_delta",
-                                {
-                                    "type": "content_block_delta",
-                                    "index": self._open_block_index,
-                                    "delta": {
-                                        "type": "text_delta",
-                                        "text": (
-                                            "\n[PROXY: Detected infinite tool-use "
-                                            "loop — stopping generation]\n"
-                                        ),
-                                    },
-                                },
-                            )
-                            yield from self._close_open_text_or_thinking()
-                            self._stop_reason = "end_turn"
-                            self._finished = True
-                            return
-
         # 4) Finish reason.
         if finish:
             yield from self._close_any_open()
@@ -503,9 +500,6 @@ class StreamTranslator:
                     "stop_reason": self._stop_reason,
                     "stop_sequence": None,
                 },
-                # output_tokens comes from the trailing usage chunk;
-                # input_tokens are reported in message_start (estimated) and
-                # reconciled here with the actual value if the model sent it.
                 "usage": {
                     "input_tokens": self._usage_input or self.estimated_input_tokens,
                     "output_tokens": self._usage_output,

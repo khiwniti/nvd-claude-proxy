@@ -94,7 +94,7 @@ def _extract_thinking(
     """
     if reasoning:
         return reasoning, content or ""
-    if content and "<think>" in content:
+    if content:
         m = _THINK_RE.search(content)
         if m:
             return m.group(1).strip(), _THINK_RE.sub("", content, count=1).lstrip()
