@@ -80,14 +80,10 @@ class NvidiaClient:
 
     @asynccontextmanager
     async def _stream(self, payload: dict):
-        async with self._client.stream(
-            "POST", "/chat/completions", json=payload
-        ) as resp:
+        async with self._client.stream("POST", "/chat/completions", json=payload) as resp:
             yield resp
 
-    async def astream_chat_completions(
-        self, payload: dict
-    ) -> AsyncIterator[dict]:
+    async def astream_chat_completions(self, payload: dict) -> AsyncIterator[dict]:
         """Yield parsed OpenAI SSE JSON chunks. Swallows the `[DONE]` sentinel.
 
         Raises `httpx.HTTPStatusError` if the upstream returns >=400 before the

@@ -4,11 +4,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
-ReasoningStyle = Literal[
-    "detailed-thinking-v1", "slash-think", "qwen-kwargs", "always-on", "none"
-]
+ReasoningStyle = Literal["detailed-thinking-v1", "slash-think", "qwen-kwargs", "always-on", "none"]
 
 
 @dataclass(slots=True)
@@ -86,6 +84,7 @@ def _bundled_models_path() -> Path:
     """Return the path to the models.yaml bundled inside the package."""
     try:
         from importlib.resources import files
+
         return Path(str(files("nvd_claude_proxy.data").joinpath("models.yaml")))
     except Exception:
         return Path(__file__).parent.parent / "data" / "models.yaml"
@@ -98,6 +97,7 @@ def load_model_registry(path: str | Path | None = None) -> ModelRegistry:
         bundled = _bundled_models_path()
         if resolved is not None and not resolved.exists():
             import warnings
+
             warnings.warn(
                 f"models.yaml not found at '{resolved}'; using bundled default. "
                 "Set MODEL_CONFIG_PATH to override.",

@@ -2,6 +2,7 @@
 
 NVIDIA VLMs accept JPG/PNG only; GIF/WEBP must be transcoded to PNG.
 """
+
 from __future__ import annotations
 
 import base64
@@ -13,7 +14,7 @@ _SUPPORTED_NIM = {"image/jpeg", "image/png"}
 
 
 def _transcode_to_png(raw: bytes) -> bytes:
-    img = Image.open(io.BytesIO(raw))
+    img: Image.Image = Image.open(io.BytesIO(raw))
     # Flatten transparency to a white background so the PNG stays JPEG-safe
     # even if a downstream component re-encodes it.
     if img.mode in ("RGBA", "LA", "P"):
@@ -44,7 +45,5 @@ def anthropic_image_to_openai(block: dict) -> dict:
             "image_url": {"url": f"data:{media_type};base64,{data_b64}"},
         }
     if stype == "file":
-        raise ValueError(
-            "Anthropic Files-API image source is not supported; send base64 or URL."
-        )
+        raise ValueError("Anthropic Files-API image source is not supported; send base64 or URL.")
     raise ValueError(f"Unknown image source type: {stype!r}")

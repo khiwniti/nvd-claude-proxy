@@ -35,6 +35,7 @@ Rules this state machine enforces:
   • Usage from the final empty-choices chunk populates message_delta.
   • Mid-stream OpenAI errors become an Anthropic `error` SSE event.
 """
+
 from __future__ import annotations
 
 import re
@@ -51,11 +52,6 @@ _JSON_START_RE = re.compile(r"[{\[]")
 
 # Detect hallucinated tag-based tool calling in text deltas.
 _TAG_HALLUCINATION_RE = re.compile(r"(command-name>|command-arguments>)", re.IGNORECASE)
-
-# Known hallucinated tools from training data mismatch — these do not exist
-
-# in the real Claude Code tool registry and cause infinite loops if allowed.
-_HALLUCINATED_TOOLS: frozenset[str] = frozenset({"Skill", "Read", "migrate", "status"})
 
 BlockType = Literal["text", "thinking", "tool_use"]
 
@@ -99,7 +95,7 @@ def _strip_leading_prose(raw: str) -> str:
     if s.startswith("```"):
         s = _FENCE_RE.sub("", s, count=1).rstrip("`").strip()
     m = _JSON_START_RE.search(s)
-    return s[m.start():] if m else ""
+    return s[m.start() :] if m else ""
 
 
 @dataclass
@@ -126,7 +122,7 @@ class StreamTranslator:
     _usage_input: int = 0
     _usage_output: int = 0
     _finished: bool = False
-    _thinking_chars: int = 0         # accumulated reasoning chars for budget tracking
+    _thinking_chars: int = 0  # accumulated reasoning chars for budget tracking
     _thinking_budget_hit: bool = False  # True once budget exhausted
 
     # Repetition detection for infinite loop prevention — tracks the last N
@@ -163,14 +159,8 @@ class StreamTranslator:
         )
 
     def _close_open_text_or_thinking(self) -> Iterator[dict]:
-        if (
-            self._open_block_type in ("text", "thinking")
-            and self._open_block_index is not None
-        ):
-            if (
-                self._open_block_type == "thinking"
-                and not self._open_thinking_signature_sent
-            ):
+        if self._open_block_type in ("text", "thinking") and self._open_block_index is not None:
+            if self._open_block_type == "thinking" and not self._open_thinking_signature_sent:
                 yield self._emit(
                     "content_block_delta",
                     {
@@ -197,10 +187,7 @@ class StreamTranslator:
         With progressive streaming, argument fragments have already been emitted
         as input_json_delta events; we only need to emit content_block_stop.
         """
-        if (
-            self._open_block_type == "tool_use"
-            and self._open_block_index is not None
-        ):
+        if self._open_block_type == "tool_use" and self._open_block_index is not None:
             yield self._emit(
                 "content_block_stop",
                 {"type": "content_block_stop", "index": self._open_block_index},
@@ -276,7 +263,7 @@ class StreamTranslator:
         if m:
             buf._json_mode = True
             buf._pre_json_acc = ""
-            json_fragment = combined[m.start():]
+            json_fragment = combined[m.start() :]
             if json_fragment:
                 yield self._emit(
                     "content_block_delta",
@@ -289,6 +276,21 @@ class StreamTranslator:
         else:
             buf._pre_json_acc = combined
 
+    def _is_declared_tool_name(self, streamed_name: str | None) -> bool:
+        """Whether a streamed tool name exists in the request's declared tool list.
+
+        If no tool schemas were provided by the caller, return True so we do not
+        block valid tool calls in permissive/non-validating deployments.
+        """
+        if not streamed_name:
+            return False
+        if not self.tool_controller.has_registered_schemas():
+            return True
+        original = self.tool_id_map.original_tool_name(streamed_name)
+        return self.tool_controller.has_tool_schema(
+            streamed_name
+        ) or self.tool_controller.has_tool_schema(original)
+
     # ── public API ────────────────────────────────────────────────────────
 
     def feed(self, openai_chunk: dict) -> Iterator[dict]:
@@ -299,11 +301,9 @@ class StreamTranslator:
 
         # Trailing usage-only chunk (`choices == []`).
         if not openai_chunk.get("choices"):
-            if (usage := openai_chunk.get("usage")):
+            if usage := openai_chunk.get("usage"):
                 self._usage_input = usage.get("prompt_tokens", self._usage_input)
-                self._usage_output = usage.get(
-                    "completion_tokens", self._usage_output
-                )
+                self._usage_output = usage.get("completion_tokens", self._usage_output)
             return
 
         choice = openai_chunk["choices"][0]
@@ -393,19 +393,21 @@ class StreamTranslator:
             o_idx = tc.get("index", 0)
             buf = self._tools_by_openai_idx.setdefault(o_idx, _ToolBuf())
             fn = tc.get("function") or {}
-            if (_id := tc.get("id")):
+            if _id := tc.get("id"):
                 buf.openai_id = _id
-            if (nm := fn.get("name")):
+            if nm := fn.get("name"):
                 buf.name = nm
             new_args = fn.get("arguments") or ""
 
-            # DEFENSIVE: Detect hallucinated tools that don't exist in registry.
-            if buf.name in _HALLUCINATED_TOOLS:
+            # DEFENSIVE: Block only truly undeclared tools. Do not block by
+            # hard-coded names (e.g. "Skill", "Read") because those may be
+            # legitimate tools in Claude Code sessions.
+            if buf.name and not self._is_declared_tool_name(buf.name):
                 if self._open_block_type != "text":
                     yield from self._close_any_open()
                     yield from self._open_text_block()
                 warning = (
-                    f"\n[PROXY BLOCKED hallucinated tool '{buf.name}' "
+                    f"\n[PROXY BLOCKED undeclared tool '{buf.name}' "
                     f"with args: {new_args or buf.pre_start_buffer}]\n"
                 )
                 yield self._emit(
@@ -438,12 +440,12 @@ class StreamTranslator:
                 self._open_block_type = "tool_use"
                 self._open_block_index = buf.anth_index
                 buf.started = True
-                
+
                 # REPETITION DETECTION: ONLY check when tool call FIRST starts.
                 self._last_tool_names.append(buf.name)
                 if len(self._last_tool_names) > 10:
                     self._last_tool_names.pop(0)
-                
+
                 if len(self._last_tool_names) >= 4:
                     unique = set(self._last_tool_names[-6:])
                     recent_count = self._last_tool_names[-6:].count(buf.name)
@@ -492,10 +494,7 @@ class StreamTranslator:
 
             elif buf.started and not buf.closed and new_args:
                 # If a different tool is currently open, switch to this one.
-                if (
-                    self._open_block_type == "tool_use"
-                    and self._open_block_index != buf.anth_index
-                ):
+                if self._open_block_type == "tool_use" and self._open_block_index != buf.anth_index:
                     yield from self._close_open_tool_use()
                     self._open_block_type = "tool_use"
                     self._open_block_index = buf.anth_index

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import tiktoken
 
-_enc = tiktoken.get_encoding("cl100k_base")
+log = logging.getLogger(__name__)
+
+_enc = None
 
 # Field names whose *values* are base64 image payloads we want to skip when
 # tokenizing a request body.
@@ -16,6 +19,23 @@ _SKIP_KEYS = {"data"}
 # cheaper 4-chars-per-token heuristic that's provably good enough for the
 # context-budget clamp, which just needs to know "are we about to overflow?".
 _FAST_PATH_THRESHOLD_CHARS = 60_000
+
+
+def _get_encoding():
+    global _enc
+    if _enc is not None:
+        return _enc
+    try:
+        _enc = tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        # In restricted networks tiktoken may fail to download the encoding
+        # on first startup. Degrade gracefully so the proxy stays available.
+        log.warning(
+            "Failed to initialize cl100k_base encoding, falling back to heuristic token estimation",
+            exc_info=True,
+        )
+        _enc = False
+    return _enc
 
 
 def _walk(obj: Any, parts: list[str]) -> None:
@@ -57,5 +77,11 @@ def approximate_tokens(body: dict) -> int:
         # that NVIDIA's BPE rarely merges. 3.0 chars/token is a robust upper
         # bound vs cl100k at 3.8-4.0 on the same content.
         return int(n / 3.0) + 3
+
+    enc = _get_encoding()
+    if enc is False:
+        # Conservative fallback for small payloads when tokenizer init failed.
+        return int(n / 3.0) + 3
+
     # Small payloads: use tiktoken directly for accuracy.
-    return len(_enc.encode(text)) + 3
+    return len(enc.encode(text)) + 3

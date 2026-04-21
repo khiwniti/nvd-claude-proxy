@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from nvd_claude_proxy.util import tokens
 from nvd_claude_proxy.util.tokens import approximate_tokens
 
 
@@ -36,3 +37,13 @@ def test_skips_base64_image_data():
     n = approximate_tokens(body)
     # Must NOT be proportional to the 100k-byte base64 blob.
     assert n < 500
+
+
+def test_falls_back_when_tokenizer_unavailable(monkeypatch):
+    monkeypatch.setattr(tokens, "_enc", False)
+    body = {
+        "model": "claude-opus-4-7",
+        "messages": [{"role": "user", "content": "offline tokenizer check"}],
+    }
+    n = approximate_tokens(body)
+    assert n >= 3

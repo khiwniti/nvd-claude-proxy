@@ -16,6 +16,7 @@ tool catalog unchanged:
 This module provides small, well-tested transforms that normalize schemas
 without losing semantic meaning.
 """
+
 from __future__ import annotations
 
 import re
@@ -64,9 +65,7 @@ def _sanitize_schema_node(node: Any, depth: int = 0) -> Any:
             # the property as unconstrained `object`, which is acceptable.
             continue
         if k == "properties" and isinstance(v, dict):
-            out[k] = {
-                pk: _sanitize_schema_node(pv, depth + 1) for pk, pv in v.items()
-            }
+            out[k] = {pk: _sanitize_schema_node(pv, depth + 1) for pk, pv in v.items()}
         elif k == "items":
             out[k] = _sanitize_schema_node(v, depth + 1)
         elif k in ("anyOf", "oneOf", "allOf") and isinstance(v, list):
@@ -98,9 +97,7 @@ def sanitize_input_schema(schema: Any) -> dict[str, Any]:
     # with a large `required` list; drop the flag — tool parsers ignore extras.
     s.pop("additionalProperties", None)
     if "properties" in s and isinstance(s["properties"], dict):
-        s["properties"] = {
-            pk: _sanitize_schema_node(pv) for pk, pv in s["properties"].items()
-        }
+        s["properties"] = {pk: _sanitize_schema_node(pv) for pk, pv in s["properties"].items()}
     return s
 
 

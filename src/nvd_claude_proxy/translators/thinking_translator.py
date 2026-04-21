@@ -1,4 +1,5 @@
 """Per-model reasoning-toggle injection and prior-turn reasoning stripping."""
+
 from __future__ import annotations
 
 import re

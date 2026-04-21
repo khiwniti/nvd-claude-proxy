@@ -13,6 +13,7 @@ Client identity (in priority order):
   2. ``x-forwarded-for`` first IP
   3. ``client.host`` (direct TCP peer)
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -130,4 +131,5 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
 
 def _iso8601(epoch_s: int) -> str:
     import time as _time
+
     return _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime(epoch_s))

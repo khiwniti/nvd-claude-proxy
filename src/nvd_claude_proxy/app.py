@@ -27,9 +27,7 @@ def _configure_logging(level: str) -> None:
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.JSONRenderer(),
         ],
-        wrapper_class=structlog.make_filtering_bound_logger(
-            logging.getLevelName(level.upper())
-        ),
+        wrapper_class=structlog.make_filtering_bound_logger(logging.getLevelName(level.upper())),
         cache_logger_on_first_use=True,
     )
 
@@ -41,6 +39,7 @@ def _install_sighup_handler(app: FastAPI) -> None:
     Not available on Windows; silently skipped there.
     """
     try:
+
         def _reload(signum, frame) -> None:  # noqa: ARG001
             try:
                 new_registry = load_model_registry(app.state.settings.model_config_path)

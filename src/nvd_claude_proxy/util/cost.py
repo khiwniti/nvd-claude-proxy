@@ -10,14 +10,15 @@ or simply ignore the ``cost_usd_est`` log field.
 
 MTK = 1 million tokens.
 """
+
 from __future__ import annotations
 
 # Per-model overrides (alias → (input_per_mtk, output_per_mtk)).
 # If a model isn't listed we fall back to `_DEFAULT_COST`.
 _MODEL_COSTS: dict[str, tuple[float, float]] = {
-    "claude-opus-4-7":   (15.00, 75.00),   # Anthropic Opus 4 list price proxy
-    "claude-sonnet-4-6": (3.00,  15.00),   # Sonnet 4 list price proxy
-    "claude-haiku-4-5":  (0.80,  4.00),    # Haiku 4 list price proxy
+    "claude-opus-4-7": (15.00, 75.00),  # Anthropic Opus 4 list price proxy
+    "claude-sonnet-4-6": (3.00, 15.00),  # Sonnet 4 list price proxy
+    "claude-haiku-4-5": (0.80, 4.00),  # Haiku 4 list price proxy
 }
 _DEFAULT_COST: tuple[float, float] = (3.00, 15.00)  # Sonnet-tier default
 

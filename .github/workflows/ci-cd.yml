@@ -58,11 +58,14 @@ jobs:
   publish:
     name: Publish to PyPI
     needs: [ lint, typecheck, test ]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      (secrets.PYPI_API_TOKEN != '' || vars.PYPI_TRUSTED_PUBLISH == 'true')
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write   # Required for OIDC trusted publishing
+      id-token: write   # Needed only for trusted publishing path
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -73,5 +76,11 @@ jobs:
         run: pip install build
       - name: Build package
         run: python -m build
+      - name: Publish to PyPI (API token)
+        if: secrets.PYPI_API_TOKEN != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
       - name: Publish to PyPI (trusted publishing)
+        if: secrets.PYPI_API_TOKEN == '' && vars.PYPI_TRUSTED_PUBLISH == 'true'
         uses: pypa/gh-action-pypi-publish@release/v1

@@ -35,7 +35,9 @@ def test_slash_think():
 
 
 def test_none_style_passthrough():
-    spec = CapabilityManifest(alias="x", nvidia_id="x", supports_reasoning=False, reasoning_style="none")
+    spec = CapabilityManifest(
+        alias="x", nvidia_id="x", supports_reasoning=False, reasoning_style="none"
+    )
     msgs = [{"role": "user", "content": "hi"}]
     out = inject_reasoning_toggle(msgs, spec, True)
     assert out == msgs

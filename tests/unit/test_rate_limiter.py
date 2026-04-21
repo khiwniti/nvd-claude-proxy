@@ -1,7 +1,7 @@
 """Tests for per-client rate limiter and body size limit."""
+
 from __future__ import annotations
 
-import pytest
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from fastapi.testclient import TestClient
@@ -12,6 +12,7 @@ from nvd_claude_proxy.util.cost import estimate_cost_usd
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
+
 
 def _app_with_rate_limit(rpm: int) -> FastAPI:
     app = FastAPI()
@@ -37,6 +38,7 @@ def _app_with_body_limit(max_mb: float) -> FastAPI:
 
 
 # ── rate limiter ───────────────────────────────────────────────────────────────
+
 
 def test_rate_limit_allows_under_limit():
     client = TestClient(_app_with_rate_limit(rpm=5))
@@ -88,6 +90,7 @@ def test_rate_limit_user_id_isolated():
 
 # ── body size limit ────────────────────────────────────────────────────────────
 
+
 def test_body_limit_allows_small_request():
     client = TestClient(_app_with_body_limit(max_mb=1.0))
     r = client.post("/v1/messages", content=b"x" * 100)
@@ -107,6 +110,7 @@ def test_body_limit_rejects_large_request():
 
 
 # ── cost estimation ────────────────────────────────────────────────────────────
+
 
 def test_cost_estimate_known_model():
     cost = estimate_cost_usd("claude-opus-4-7", input_tokens=1_000_000, output_tokens=0)

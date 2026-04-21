@@ -1,4 +1,5 @@
 """Stateful controller for managing parallel tool invocation and result collection."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +15,7 @@ logger = structlog.get_logger(__name__)
 # skipped gracefully (arg_validation flag in ToolConfig has no effect).
 try:
     from jsonschema import Draft7Validator, ValidationError as _SchemaValidationError
+
     _HAS_JSONSCHEMA = True
 except ImportError:
     _HAS_JSONSCHEMA = False
@@ -95,6 +97,14 @@ class ToolInvocationController:
             if not self.validate_schema(original, args) and not self.validate_schema(name, args):
                 failing.append(name)
         return failing
+
+    def has_tool_schema(self, name: str) -> bool:
+        """Return True when a tool name exists in the declared request schema map."""
+        return name in self._tool_schemas
+
+    def has_registered_schemas(self) -> bool:
+        """Return True when request tool schemas were provided."""
+        return bool(self._tool_schemas)
 
     # ── parallel dispatch (proxy-local, future use) ───────────────────────
 

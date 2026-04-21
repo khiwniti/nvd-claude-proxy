@@ -9,9 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Search for .env in these locations, in priority order (first found wins).
 # This lets `ncp` work from any working directory when installed globally.
 _ENV_FILE_CANDIDATES: list[str] = [
-    ".env",                                         # cwd (local dev / docker)
+    ".env",  # cwd (local dev / docker)
     str(Path.home() / ".config" / "nvd-claude-proxy" / ".env"),  # XDG
-    str(Path.home() / ".nvd-claude-proxy"),         # legacy dot-file
+    str(Path.home() / ".nvd-claude-proxy"),  # legacy dot-file
 ]
 
 
@@ -27,9 +27,7 @@ class Settings(BaseSettings):
     )
 
     nvidia_api_key: str = Field(..., alias="NVIDIA_API_KEY")
-    nvidia_base_url: str = Field(
-        "https://integrate.api.nvidia.com/v1", alias="NVIDIA_BASE_URL"
-    )
+    nvidia_base_url: str = Field("https://integrate.api.nvidia.com/v1", alias="NVIDIA_BASE_URL")
     proxy_host: str = Field("127.0.0.1", alias="PROXY_HOST")
     proxy_port: int = Field(8787, alias="PROXY_PORT")
     proxy_api_key: str | None = Field(default=None, alias="PROXY_API_KEY")
