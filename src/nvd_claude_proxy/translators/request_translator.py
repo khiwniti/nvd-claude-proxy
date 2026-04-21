@@ -244,6 +244,7 @@ def translate_request(
     # When a lot of tools are present, tighten per-description limits to keep
     # the prompt under the model's context window.
     mapped_tools: list[dict] = []
+    _ALLOWED_META_TOOLS = {"bash", "computer", "browser", "memory"}
     if (tools := anthropic_body.get("tools")) and spec.tools.supports:
         tool_count = len(tools)
         if tool_count > 100:
@@ -252,8 +253,16 @@ def translate_request(
             desc_cap = 280
         else:
             desc_cap = 480
+            
+        filtered_tools = []
+        for t in tools:
+            # Drop hallucinated meta-tools if they sneak into the input
+            if t.get("name") in _ALLOWED_META_TOOLS:
+                continue
+            filtered_tools.append(t)
+
         mapped_tools = anthropic_tools_to_openai(
-            tools, tool_id_map=tool_id_map, description_cap=desc_cap
+            filtered_tools, tool_id_map=tool_id_map, description_cap=desc_cap
         )
 
     # NVIDIA rejects the request if `max_tokens + input_tokens > max_context`.
