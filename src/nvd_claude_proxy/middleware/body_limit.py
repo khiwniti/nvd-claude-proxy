@@ -6,6 +6,7 @@ whose ``Content-Length`` exceeds the limit with 413 + Anthropic error body.
 Claude Code's largest payloads (273 tools, large system prompts) are typically
 well under 2 MB.  Setting ``MAX_REQUEST_BODY_MB=10`` is a safe production default.
 """
+
 from __future__ import annotations
 
 import structlog

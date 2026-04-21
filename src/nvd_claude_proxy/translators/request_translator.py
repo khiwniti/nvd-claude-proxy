@@ -1,4 +1,5 @@
 """Anthropic Messages request → NVIDIA (OpenAI) chat.completions request."""
+
 from __future__ import annotations
 
 import json as _json
@@ -34,6 +35,7 @@ class ContextOverflowError(ValueError):
     The caller should convert this into a proper Anthropic 400 response rather
     than forwarding the request to NVIDIA (which will always fail with a 400).
     """
+
     def __init__(self, est_input: int, max_context: int, model: str) -> None:
         self.est_input = est_input
         self.max_context = max_context
@@ -130,9 +132,7 @@ def _anthropic_message_to_openai(
                     "type": "function",
                     "function": {
                         "name": block["name"],
-                        "arguments": _json.dumps(
-                            block.get("input", {}), ensure_ascii=False
-                        ),
+                        "arguments": _json.dumps(block.get("input", {}), ensure_ascii=False),
                     },
                 }
             )
@@ -168,9 +168,9 @@ def _anthropic_message_to_openai(
                         src = sub.get("source") or {}
                         media = src.get("media_type", "image")
                         if src.get("type") == "base64":
-                            flat.append(f"[image/{media}: {len(src.get('data',''))} chars base64]")
+                            flat.append(f"[image/{media}: {len(src.get('data', ''))} chars base64]")
                         elif src.get("type") == "url":
-                            flat.append(f"[image url: {src.get('url','')}]")
+                            flat.append(f"[image url: {src.get('url', '')}]")
                         else:
                             flat.append("[image]")
                 raw = "\n".join(flat)
@@ -206,9 +206,7 @@ def _anthropic_message_to_openai(
             if any(p["type"] != "text" for p in text_parts):
                 out.append({"role": "user", "content": text_parts})
             else:
-                out.append(
-                    {"role": "user", "content": "".join(p["text"] for p in text_parts)}
-                )
+                out.append({"role": "user", "content": "".join(p["text"] for p in text_parts)})
         out.extend(tool_result_messages)
     return out
 
@@ -253,7 +251,7 @@ def translate_request(
             desc_cap = 280
         else:
             desc_cap = 480
-            
+
         filtered_tools = []
         for t in tools:
             # Drop hallucinated meta-tools if they sneak into the input
@@ -268,9 +266,7 @@ def translate_request(
     # NVIDIA rejects the request if `max_tokens + input_tokens > max_context`.
     # Estimate with cl100k_base over *everything* that will be billed as input:
     # messages (system+user+assistant+tool) and tool schemas.
-    est_input = approximate_tokens(
-        {"messages": openai_messages, "tools": mapped_tools}
-    )
+    est_input = approximate_tokens({"messages": openai_messages, "tools": mapped_tools})
     # Pre-flight guard: if the input alone fills the window, bail immediately
     # with a structured error rather than letting NVIDIA return a cryptic 400.
     if est_input >= spec.max_context - _MIN_OUTPUT:
@@ -318,5 +314,7 @@ def translate_request(
 
     # Qwen3-style thinking kwarg (bypasses system-msg toggle).
     if spec.reasoning_style == "qwen-kwargs":
-        payload["chat_template_kwargs"] = {"enable_thinking": thinking is not None and thinking is not False}
+        payload["chat_template_kwargs"] = {
+            "enable_thinking": thinking is not None and thinking is not False
+        }
     return payload

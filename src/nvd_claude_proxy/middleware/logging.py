@@ -18,9 +18,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception:
-            _log.exception(
-                "unhandled", path=request.url.path, rid=rid, method=request.method
-            )
+            _log.exception("unhandled", path=request.url.path, rid=rid, method=request.method)
             raise
         dur_ms = (time.perf_counter() - t0) * 1000
         _log.info(

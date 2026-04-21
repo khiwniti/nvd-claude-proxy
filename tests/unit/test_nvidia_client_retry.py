@@ -48,9 +48,7 @@ async def test_retries_on_502(monkeypatch):
 
     transport = httpx.MockTransport(handler)
     client = NvidiaClient(s)
-    client._client = httpx.AsyncClient(
-        base_url=s.nvidia_base_url, transport=transport
-    )
+    client._client = httpx.AsyncClient(base_url=s.nvidia_base_url, transport=transport)
     try:
         resp = await client.chat_completions({"model": "x", "messages": []})
     finally:
@@ -76,9 +74,7 @@ async def test_gives_up_after_max_retries(monkeypatch):
 
     transport = httpx.MockTransport(handler)
     client = NvidiaClient(s)
-    client._client = httpx.AsyncClient(
-        base_url=s.nvidia_base_url, transport=transport
-    )
+    client._client = httpx.AsyncClient(base_url=s.nvidia_base_url, transport=transport)
     try:
         resp = await client.chat_completions({"model": "x", "messages": []})
     finally:
@@ -106,9 +102,7 @@ async def test_400_not_retried(monkeypatch):
 
     transport = httpx.MockTransport(handler)
     client = NvidiaClient(s)
-    client._client = httpx.AsyncClient(
-        base_url=s.nvidia_base_url, transport=transport
-    )
+    client._client = httpx.AsyncClient(base_url=s.nvidia_base_url, transport=transport)
     try:
         resp = await client.chat_completions({"model": "x", "messages": []})
     finally:

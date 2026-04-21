@@ -1,5 +1,6 @@
 """FastAPI-level tests ensuring route responses carry Anthropic-compatible
 headers and fields."""
+
 from __future__ import annotations
 
 from fastapi.testclient import TestClient

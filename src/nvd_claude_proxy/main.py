@@ -1,4 +1,5 @@
 """Entrypoint: `python -m nvd_claude_proxy.main` or `nvd-claude-proxy`."""
+
 from __future__ import annotations
 
 import uvicorn
@@ -13,11 +14,13 @@ def run() -> None:
     http = "auto"
     try:
         import uvloop  # noqa: F401
+
         loop = "uvloop"
     except ImportError:
         pass
     try:
         import httptools  # noqa: F401
+
         http = "httptools"
     except ImportError:
         pass
