@@ -29,6 +29,7 @@ class ToolConfig:
 class CapabilityManifest:
     alias: str
     nvidia_id: str
+    supports_tools: bool = True
     supports_vision: bool = False
     reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
     tools: ToolConfig = field(default_factory=ToolConfig)
@@ -37,20 +38,12 @@ class CapabilityManifest:
     temperature_override: float | None = None
     failover_to: list[str] = field(default_factory=list)
     # Legacy support
-    supports_tools: bool = True
     supports_reasoning: bool = False
     reasoning_style: ReasoningStyle = "none"
 
     def __post_init__(self):
-        # Ensure legacy scalar fields mirror the canonical nested structures so
-        # any code reading spec.supports_reasoning / spec.reasoning_style gets
-        # correct values even if only the nested form was set by the loader.
-        if self.reasoning.style != "none" and not self.supports_reasoning:
-            self.supports_reasoning = True
-        if self.reasoning_style == "none" and self.reasoning.style != "none":
-            self.reasoning_style = self.reasoning.style  # type: ignore[assignment]
-        # Sync tools legacy field with nested ToolConfig.
-        self.supports_tools = self.tools.supports
+        if self.reasoning_style != "none":
+            self.reasoning.style = self.reasoning_style
 
 
 @dataclass(slots=True)
@@ -72,13 +65,7 @@ class ModelRegistry:
         return chain
 
     def resolve(self, claude_model_name: str | None) -> CapabilityManifest:
-        """Resolve a Claude-style model name to a configured CapabilityManifest.
-
-        Order:
-          1. exact alias match
-          2. longest-prefix fallback
-          3. default big model
-        """
+        """Resolve a Claude-style model name to a configured CapabilityManifest."""
         name = (claude_model_name or "").strip()
         if name and name in self.specs:
             return self.specs[name]
@@ -98,7 +85,7 @@ class ModelRegistry:
 def _bundled_models_path() -> Path:
     """Return the path to the models.yaml bundled inside the package."""
     try:
-        from importlib.resources import files  # Python 3.9+
+        from importlib.resources import files
         return Path(str(files("nvd_claude_proxy.data").joinpath("models.yaml")))
     except Exception:
         return Path(__file__).parent.parent / "data" / "models.yaml"
@@ -120,7 +107,6 @@ def load_model_registry(path: str | Path | None = None) -> ModelRegistry:
     data = yaml.safe_load(resolved.read_text(encoding="utf-8")) or {}
     specs = {}
     for alias, spec_data in (data.get("aliases") or {}).items():
-        # Map flat config to nested structures
         specs[alias] = CapabilityManifest(
             alias=alias,
             nvidia_id=spec_data["nvidia_id"],
@@ -135,6 +121,8 @@ def load_model_registry(path: str | Path | None = None) -> ModelRegistry:
             max_output=spec_data.get("max_output", 16384),
             temperature_override=spec_data.get("temperature_override"),
             failover_to=spec_data.get("failover_to") or [],
+            reasoning_style=spec_data.get("reasoning_style", "none"),
+            supports_reasoning=spec_data.get("supports_reasoning", False),
         )
 
     return ModelRegistry(
