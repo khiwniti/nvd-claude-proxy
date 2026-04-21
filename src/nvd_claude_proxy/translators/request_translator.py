@@ -23,8 +23,8 @@ from .vision_translator import anthropic_image_to_openai
 # model's hard context window. Real-world drift observed:
 #   Claude Code /init with 273 tools: cl100k estimate ~93k, NVIDIA actual 99.7k
 #   Context7 MCP query: cl100k estimate ~121k, NVIDIA actual 132k  (⇒ ~9% under)
-# 16 k headroom absorbs the worst-case undercount we've seen in production.
-_CONTEXT_HEADROOM = 16_384
+# 64k headroom (up from 16k) absorbs the worst-case undercount on 1M windows.
+_CONTEXT_HEADROOM = 65_536
 # Minimum we will ever allow for output even under heavy clamping so the
 # model has room for at least a brief answer.
 _MIN_OUTPUT = 256
