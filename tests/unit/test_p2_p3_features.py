@@ -307,7 +307,7 @@ def test_sighup_handler_registered():
     """The SIGHUP signal handler must be the proxy's reload function."""
     if not hasattr(signal, "SIGHUP"):
         pytest.skip("SIGHUP not available on this platform")
-    app = create_app()
+    _ = create_app()
     handler = signal.getsignal(signal.SIGHUP)
     assert callable(handler) and handler is not signal.SIG_DFL
 
@@ -317,7 +317,6 @@ def test_sighup_reload_updates_registry(tmp_path):
     if not hasattr(signal, "SIGHUP"):
         pytest.skip("SIGHUP not available on this platform")
     import yaml
-    from nvd_claude_proxy.config.models import load_model_registry
     from nvd_claude_proxy.app import _install_sighup_handler
     from fastapi import FastAPI
 

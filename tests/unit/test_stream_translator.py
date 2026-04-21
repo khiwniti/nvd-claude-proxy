@@ -4,11 +4,15 @@ from nvd_claude_proxy.translators.stream_translator import StreamTranslator
 from nvd_claude_proxy.translators.tool_translator import ToolIdMap
 from nvd_claude_proxy.translators.tool_controller import ToolInvocationController
 from nvd_claude_proxy.config.models import CapabilityManifest
-from unittest.mock import MagicMock
 
-def _collect(chunks):
+
+def _collect(chunks, tool_schemas=None):
     spec = CapabilityManifest(alias="claude-opus-4-7", nvidia_id="nvidia/big")
-    tool_controller = ToolInvocationController(spec, ToolIdMap())
+    tool_controller = ToolInvocationController(
+        spec,
+        ToolIdMap(),
+        tool_schemas=tool_schemas or {},
+    )
     st = StreamTranslator(model_name="claude-opus-4-7", tool_id_map=ToolIdMap(), tool_controller=tool_controller)
     events = []
     for c in chunks:
@@ -127,3 +131,40 @@ def test_thinking_block_emits_signature_before_stop():
         if e["event"] == "content_block_stop" and e["data"]["index"] == 0
     )
     assert sig_idx < stop_idx
+
+
+def test_declared_skill_tool_is_not_blocked():
+    chunks = [
+        {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_skill", "type": "function", "function": {"name": "Skill", "arguments": "{\"skill_name\":\"/vercel:env\"}"}}]}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 2}},
+    ]
+    events = _collect(chunks, tool_schemas={"Skill": {"type": "object", "properties": {}}})
+    starts = [
+        e for e in events
+        if e["event"] == "content_block_start"
+        and e["data"]["content_block"]["type"] == "tool_use"
+    ]
+    assert len(starts) == 1
+    assert starts[0]["data"]["content_block"]["name"] == "Skill"
+    assert not any(
+        e["event"] == "content_block_delta"
+        and e["data"]["delta"]["type"] == "text_delta"
+        and "PROXY BLOCKED undeclared tool" in e["data"]["delta"]["text"]
+        for e in events
+    )
+
+
+def test_undeclared_tool_is_blocked():
+    chunks = [
+        {"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_ghost", "type": "function", "function": {"name": "GhostTool", "arguments": "{\"x\":1}"}}]}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"choices": [], "usage": {"prompt_tokens": 2, "completion_tokens": 2}},
+    ]
+    events = _collect(chunks, tool_schemas={"Read": {"type": "object", "properties": {}}})
+    assert any(
+        e["event"] == "content_block_delta"
+        and e["data"]["delta"]["type"] == "text_delta"
+        and "PROXY BLOCKED undeclared tool 'GhostTool'" in e["data"]["delta"]["text"]
+        for e in events
+    )
