@@ -81,7 +81,7 @@ aliases:
 
   # GLM-5-1
   glm-5-1:
-    nvidia_id: "nvidia/glm-5-1"
+    nvidia_id: "z-ai/glm-5.1"
     supports_tools: true
     supports_vision: false
     supports_reasoning: false
