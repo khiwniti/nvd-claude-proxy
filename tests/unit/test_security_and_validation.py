@@ -217,7 +217,7 @@ class TestMessagesRequestValidation:
             "messages": [{"role": "user", "content": "Hello"}],
             "max_tokens": 100,
             "tools": [
-                {"name": "123invalid", "input_schema": {"type": "object"}},  # Starts with number
+                {"name": "invalid name", "input_schema": {"type": "object"}},  # Contains space
             ]
         }
         is_valid, result = validate_messages_request(body)

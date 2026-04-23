@@ -212,12 +212,15 @@ class Tool(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
-        # Anthropic-specified pattern; MCP tool names like mcp__uuid__name are valid.
-        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", v):
+        # Anthropic-specified pattern; MCP tool names can be long and include hyphens.
+        # We allow up to 128 chars to be safe for complex MCP generators.
+        pattern = r"^[a-zA-Z0-9_-]{1,128}$"
+        if not re.fullmatch(pattern, v):
             raise ValueError(
-                f"Tool name '{v[:32]}' is invalid. Must match [a-zA-Z0-9_-]{{1,64}}."
+                f"Tool name '{v}' is invalid. Must match {pattern}."
             )
         return v
+
 
 
 class ToolChoiceAuto(BaseModel):
