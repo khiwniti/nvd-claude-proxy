@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import time
+import webbrowser
 from pathlib import Path
 
 import httpx
@@ -55,14 +56,24 @@ def _health_url(host: str, port: int) -> str:
     return f"{_base_url(host, port)}/healthz"
 
 
-def _wait_for_proxy(host: str, port: int, timeout: float = 20.0) -> bool:
-    """Poll /healthz until the proxy is accepting connections."""
+def _wait_for_proxy(
+    host: str, port: int, timeout: float = 20.0, required_version: str | None = None
+) -> bool:
+    """Poll /healthz until the proxy is accepting connections.
+    
+    If `required_version` is set, also verify the proxy's version matches.
+    """
     url = _health_url(host, port)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
             r = httpx.get(url, timeout=2.0)
             if r.status_code == 200:
+                if required_version:
+                    data = r.json()
+                    if data.get("version") != required_version:
+                        # Version mismatch — don't reuse.
+                        return False
                 return True
         except Exception:  # noqa: BLE001
             pass
@@ -135,7 +146,7 @@ def _load_registry(settings=None):
     import warnings
     from ..config.models import load_model_registry
 
-    path = settings.model_config_path if settings else None
+    path = None
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         return load_model_registry(path)
@@ -251,23 +262,37 @@ def _run_proxy_and_claude(
     registry = _load_registry(settings)
 
     # ── reuse existing proxy if already healthy ─────────────────────────────
-    if _wait_for_proxy(host, port, timeout=1.0):
-        console.print(f"[dim]Reusing proxy already running on {_base_url(host, port)}[/dim]")
-        proxy_proc = None
+    # Check if a proxy is already running on the port.
+    is_up = _wait_for_proxy(host, port, timeout=1.0)
+    if is_up:
+        # Check if the version matches.
+        matches = _wait_for_proxy(host, port, timeout=0.5, required_version=__version__)
+        if matches:
+            console.print(f"[dim]Reusing proxy already running on {_base_url(host, port)}[/dim]")
+            proxy_proc = None
 
-        def _stop_proxy():
-            pass  # not ours to stop
+            def _stop_proxy():
+                pass  # not ours to stop
+        else:
+            err_console.print(f"[yellow]⚠ Stale proxy detected on port {port}.[/yellow]")
+            err_console.print(f"  Current version: [bold]{__version__}[/bold]")
+            err_console.print("  Run [cyan]ncp kill[/cyan] to stop the old instance, then try again.")
+            raise typer.Exit(1)
     else:
         # ── start the proxy as a subprocess ───────────────────────────────────
         env = os.environ.copy()
         env["PROXY_HOST"] = host
         env["PROXY_PORT"] = str(port)
 
+        import tempfile
+        log_file = tempfile.NamedTemporaryFile(delete=False, prefix="ncp-proxy-", suffix=".log")
+        log_path = Path(log_file.name)
+
         proxy_proc = subprocess.Popen(
             [sys.executable, "-m", "nvd_claude_proxy.main"],
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
         )
 
         def _stop_proxy():
@@ -277,13 +302,24 @@ def _run_proxy_and_claude(
                     proxy_proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     proxy_proc.kill()
+            if log_path.exists():
+                try:
+                    log_path.unlink()
+                except Exception:
+                    pass
 
         # ── wait for readiness ─────────────────────────────────────────────────
         with console.status("[bold green]Starting proxy…[/bold green]"):
             ready = _wait_for_proxy(host, port, timeout=20.0)
 
         if not ready:
-            err_console.print("[red]Proxy did not start in time. Check NVIDIA_API_KEY.[/red]")
+            err_console.print("[red]Proxy did not start in time.[/red]")
+            if log_path.exists():
+                logs = log_path.read_text().splitlines()[-10:]
+                if logs:
+                    err_console.print("[dim]Last 10 lines of proxy log:[/dim]")
+                    for line in logs:
+                        err_console.print(f"  {line}")
             _stop_proxy()
             raise typer.Exit(1)
 
@@ -335,6 +371,7 @@ def _run_proxy_and_claude(
     claude_cmd = [claude_bin, *claude_extra_args]
     console.print(f"[dim]Launching:[/dim] [cyan]{' '.join(claude_cmd)}[/cyan]\n")
 
+    result = None
     try:
         result = subprocess.run(claude_cmd, env=claude_env)
     except KeyboardInterrupt:
@@ -343,7 +380,7 @@ def _run_proxy_and_claude(
         console.print("\n[dim]Stopping proxy…[/dim]")
         _stop_proxy()
 
-    raise typer.Exit(getattr(result, "returncode", 0))
+    raise typer.Exit(getattr(result, "returncode", 0) if result is not None else 0)
 
 
 def _ensure_claude(*, update: bool = False) -> str | None:
@@ -736,8 +773,45 @@ def init(
         "\nStart the proxy:\n"
         "  [cyan]ncp[/cyan]                  # start proxy + claude\n"
         "  [cyan]ncp proxy[/cyan]            # proxy only\n"
+        "  [cyan]ncp dashboard[/cyan]        # open UI\n"
         "  [cyan]ncp models list[/cyan]      # show model aliases\n"
     )
+
+
+# ── ncp dashboard ─────────────────────────────────────────────────────────────
+
+
+@app.command()
+def dashboard(
+    port: int = typer.Option(None, "--port", "-p", help="Proxy port."),
+    host: str = typer.Option(None, "--host", help="Bind host."),
+) -> None:
+    """Open the management dashboard in your default web browser."""
+    # Settings might not be initialized if they just installed
+    try:
+        settings = _load_settings()
+        effective_host = host or settings.proxy_host
+        effective_port = port or settings.proxy_port
+    except Exception:  # noqa: BLE001
+        effective_host = host or "127.0.0.1"
+        effective_port = port or 8788
+
+    url = f"http://{effective_host}:{effective_port}/dashboard/"
+
+    # Check if proxy is running
+    is_up = _wait_for_proxy(effective_host, effective_port, timeout=0.5)
+    if not is_up:
+        console.print(
+            Panel(
+                f"[yellow]Proxy is not currently running on {effective_host}:{effective_port}[/yellow]\n"
+                "Launch it with [bold cyan]ncp[/bold cyan] to see live data.",
+                title="Dashboard",
+                border_style="yellow",
+            )
+        )
+
+    console.print(f"Opening [cyan]{url}[/cyan] ...")
+    webbrowser.open(url)
 
 
 # ── ncp kill ──────────────────────────────────────────────────────────────────
@@ -757,22 +831,42 @@ def kill(
     try:
         import subprocess as _sp
 
-        # lsof works on macOS/Linux; find PIDs listening on TCP port
+        # 1. Find PIDs listening on the TCP port (aggressive)
         result = _sp.run(
             ["lsof", "-ti", f"tcp:{effective_port}"],
             capture_output=True,
             text=True,
         )
-        pids = [p.strip() for p in result.stdout.splitlines() if p.strip()]
+        pids = {p.strip() for p in result.stdout.splitlines() if p.strip()}
+
+        # 2. Find PIDs by process name (comprehensive)
+        # Search for both 'ncp' and 'nvd_claude_proxy'
+        try:
+            pgrep_res = _sp.run(
+                ["pgrep", "-f", "nvd_claude_proxy|ncp"],
+                capture_output=True,
+                text=True,
+            )
+            pids.update(p.strip() for p in pgrep_res.stdout.splitlines() if p.strip())
+        except FileNotFoundError:
+            pass
+
         if not pids:
-            console.print(f"[dim]Nothing listening on port {effective_port}.[/dim]")
+            console.print(f"[dim]Nothing listening on port {effective_port} or related to ncp found.[/dim]")
             return
-        for pid in pids:
+
+        # Don't kill ourselves
+        my_pid = str(os.getpid())
+        pids.discard(my_pid)
+
+        for pid in sorted(pids, key=int, reverse=True):
             try:
-                os.kill(int(pid), _signal.SIGTERM)
-                console.print(f"[green]✓[/green] Killed PID {pid} (port {effective_port})")
+                os.kill(int(pid), _signal.SIGKILL)
+                console.print(f"[green]✓[/green] Killed PID {pid}")
             except ProcessLookupError:
                 pass
+            except Exception as e:
+                err_console.print(f"[dim]Failed to kill {pid}: {e}[/dim]")
     except FileNotFoundError:
         err_console.print("[yellow]lsof not found — cannot auto-kill. Run:[/yellow]")
         err_console.print(f"  kill $(lsof -ti tcp:{effective_port})")

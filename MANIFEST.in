@@ -1,0 +1,3 @@
+recursive-include src/nvd_claude_proxy/static *
+recursive-include src/nvd_claude_proxy/data *
+include src/nvd_claude_proxy/py.typed

@@ -45,6 +45,7 @@ from typing import Iterator, Literal
 from ..util.ids import new_message_id, new_thinking_signature
 from .tool_controller import ToolInvocationController
 from .tool_translator import ToolIdMap
+from .transformers import TransformerChain
 
 _FENCE_RE = re.compile(r"^```[a-z]*\s*", re.MULTILINE)
 # Matches first JSON object/array start character.
@@ -52,6 +53,48 @@ _JSON_START_RE = re.compile(r"[{\[]")
 
 # Detect hallucinated tag-based tool calling in text deltas.
 _TAG_HALLUCINATION_RE = re.compile(r"(command-name>|command-arguments>)", re.IGNORECASE)
+
+# Claude Code internal tools that are always allowed.
+# These are NOT in the user's tool schemas but are legitimate Claude Code
+# tools that the model may call. We allow them through without validation.
+_CLAUDE_CODE_INTERNAL_TOOLS = frozenset({
+    # Claude Code core commands
+    "Read", "Write", "Edit", "Bash", "NotebookEdit",
+    # Skill tool (for invoking agent skills)
+    "Skill", "skill",
+    # MCP tools
+    "mcp__tool",
+    # AskUserQuestion is sometimes generated
+    "AskUserQuestion",
+    # Claude Code internal commands that may appear in responses
+    "WebSearch", "WebFetch", "WebRead",
+    # Container/Browser tools
+    "computer", "bash", "browser",
+    # Legacy/alternative names
+    "AskUser", "Ask", "ask_user_question",
+    # Task/plan tools
+    "Task", "Plan", "plan",
+    # Any tool starting with common prefixes that might be Claude Code internals
+})
+
+def _is_claude_code_internal_tool(name: str) -> bool:
+    """Check if a tool name is a known Claude Code internal tool."""
+    if not name:
+        return False
+    # Direct match
+    if name in _CLAUDE_CODE_INTERNAL_TOOLS:
+        return True
+    # Case-insensitive match for common tools
+    name_lower = name.lower()
+    if name_lower in _CLAUDE_CODE_INTERNAL_TOOLS:
+        return True
+    # Match by prefix for MCP-style tools
+    if name_lower.startswith("mcp__"):
+        return True
+    # Match by prefix for Skill invocations
+    if name_lower.startswith("skill:"):
+        return True
+    return False
 
 BlockType = Literal["text", "thinking", "tool_use"]
 
@@ -109,6 +152,7 @@ class StreamTranslator:
     budget_tokens: int | None = None
     # Pre-estimated input tokens emitted in message_start so SDK cost tracking works.
     estimated_input_tokens: int = 0
+    transformer_chain: TransformerChain | None = None
 
     _message_id: str = field(default_factory=new_message_id)
     _started: bool = False
@@ -134,14 +178,23 @@ class StreamTranslator:
 
     # ── helpers ───────────────────────────────────────────────────────────
 
-    def _emit(self, event: str, data: dict) -> dict:
-        return {"event": event, "data": data}
+    def _emit(self, event: str, data: dict) -> Iterator[dict]:
+        # Pings should always be emitted to keep the connection alive
+        if event == "ping":
+            yield {"event": event, "data": data}
+            return
+
+        if self.transformer_chain:
+            data = self.transformer_chain.transform_stream_chunk(data)
+            if data is None:
+                return
+        yield {"event": event, "data": data}
 
     def _ensure_started(self) -> Iterator[dict]:
         if self._started:
             return
         self._started = True
-        yield self._emit(
+        yield from self._emit(
             "message_start",
             {
                 "type": "message_start",
@@ -161,7 +214,7 @@ class StreamTranslator:
     def _close_open_text_or_thinking(self) -> Iterator[dict]:
         if self._open_block_type in ("text", "thinking") and self._open_block_index is not None:
             if self._open_block_type == "thinking" and not self._open_thinking_signature_sent:
-                yield self._emit(
+                yield from self._emit(
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
@@ -173,7 +226,7 @@ class StreamTranslator:
                     },
                 )
                 self._open_thinking_signature_sent = True
-            yield self._emit(
+            yield from self._emit(
                 "content_block_stop",
                 {"type": "content_block_stop", "index": self._open_block_index},
             )
@@ -188,7 +241,7 @@ class StreamTranslator:
         as input_json_delta events; we only need to emit content_block_stop.
         """
         if self._open_block_type == "tool_use" and self._open_block_index is not None:
-            yield self._emit(
+            yield from self._emit(
                 "content_block_stop",
                 {"type": "content_block_stop", "index": self._open_block_index},
             )
@@ -208,7 +261,7 @@ class StreamTranslator:
         self._next_index += 1
         self._open_block_type = "text"
         self._open_block_index = idx
-        yield self._emit(
+        yield from self._emit(
             "content_block_start",
             {
                 "type": "content_block_start",
@@ -223,7 +276,7 @@ class StreamTranslator:
         self._open_block_type = "thinking"
         self._open_block_index = idx
         self._open_thinking_signature_sent = False
-        yield self._emit(
+        yield from self._emit(
             "content_block_start",
             {
                 "type": "content_block_start",
@@ -246,7 +299,7 @@ class StreamTranslator:
         if not fragment:
             return
         if buf._json_mode:
-            yield self._emit(
+            yield from self._emit(
                 "content_block_delta",
                 {
                     "type": "content_block_delta",
@@ -265,7 +318,7 @@ class StreamTranslator:
             buf._pre_json_acc = ""
             json_fragment = combined[m.start() :]
             if json_fragment:
-                yield self._emit(
+                yield from self._emit(
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
@@ -284,12 +337,18 @@ class StreamTranslator:
         """
         if not streamed_name:
             return False
-        if not self.tool_controller.has_registered_schemas():
+        # Allow Claude Code internal tools unconditionally
+        if _is_claude_code_internal_tool(streamed_name):
             return True
+        if not self.tool_controller or not self.tool_controller.has_registered_schemas():
+            return True
+        
+        # Check if the name matches directly or through fuzzy resolution.
+        if self.tool_controller.resolve_tool_name(streamed_name) is not None:
+            return True
+            
         original = self.tool_id_map.original_tool_name(streamed_name)
-        return self.tool_controller.has_tool_schema(
-            streamed_name
-        ) or self.tool_controller.has_tool_schema(original)
+        return self.tool_controller.resolve_tool_name(original) is not None
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -329,7 +388,7 @@ class StreamTranslator:
                 elif len(reasoning) > remaining_chars:
                     reasoning = reasoning[:remaining_chars]
                     self._thinking_chars += len(reasoning)
-                    yield self._emit(
+                    yield from self._emit(
                         "content_block_delta",
                         {
                             "type": "content_block_delta",
@@ -343,7 +402,7 @@ class StreamTranslator:
                 else:
                     self._thinking_chars += len(reasoning)
             if reasoning:
-                yield self._emit(
+                yield from self._emit(
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
@@ -354,10 +413,100 @@ class StreamTranslator:
 
         # 2) Text chunk.
         if text:
+            # Check for <think> tag start
+            if "<think>" in text:
+                parts = text.split("<think>", 1)
+                pre_think = parts[0]
+                post_think = parts[1]
+                
+                if pre_think:
+                    if self._open_block_type != "text":
+                        yield from self._close_any_open()
+                        yield from self._open_text_block()
+                    yield from self._emit(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": self._open_block_index,
+                            "delta": {"type": "text_delta", "text": pre_think},
+                        },
+                    )
+                
+                yield from self._close_any_open()
+                yield from self._open_thinking_block()
+                
+                if post_think:
+                    # Check for closing tag in the same chunk
+                    if "</think>" in post_think:
+                        think_parts = post_think.split("</think>", 1)
+                        inner_think = think_parts[0]
+                        after_think = think_parts[1]
+                        
+                        if inner_think:
+                            yield from self._emit(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": self._open_block_index,
+                                    "delta": {"type": "thinking_delta", "thinking": inner_think},
+                                },
+                            )
+                        
+                        yield from self._close_any_open()
+                        if after_think:
+                            yield from self._open_text_block()
+                            yield from self._emit(
+                                "content_block_delta",
+                                {
+                                    "type": "content_block_delta",
+                                    "index": self._open_block_index,
+                                    "delta": {"type": "text_delta", "text": after_think},
+                                },
+                            )
+                    else:
+                        yield from self._emit(
+                            "content_block_delta",
+                            {
+                                "type": "content_block_delta",
+                                "index": self._open_block_index,
+                                "delta": {"type": "thinking_delta", "thinking": post_think},
+                            },
+                        )
+                return
+
+            # Check for </think> tag end (if currently in thinking block)
+            if self._open_block_type == "thinking" and "</think>" in text:
+                parts = text.split("</think>", 1)
+                inner_think = parts[0]
+                post_think = parts[1]
+                
+                if inner_think:
+                    yield from self._emit(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": self._open_block_index,
+                            "delta": {"type": "thinking_delta", "thinking": inner_think},
+                        },
+                    )
+                
+                yield from self._close_any_open()
+                if post_think:
+                    yield from self._open_text_block()
+                    yield from self._emit(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": self._open_block_index,
+                            "delta": {"type": "text_delta", "text": post_think},
+                        },
+                    )
+                return
+
             if _TAG_HALLUCINATION_RE.search(text):
                 yield from self._close_any_open()
                 yield from self._open_text_block()
-                yield self._emit(
+                yield from self._emit(
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
@@ -379,7 +528,7 @@ class StreamTranslator:
             if self._open_block_type != "text":
                 yield from self._close_any_open()
                 yield from self._open_text_block()
-            yield self._emit(
+            yield from self._emit(
                 "content_block_delta",
                 {
                     "type": "content_block_delta",
@@ -396,7 +545,13 @@ class StreamTranslator:
             if _id := tc.get("id"):
                 buf.openai_id = _id
             if nm := fn.get("name"):
-                buf.name = nm
+                # Fuzzy resolve hallucinated tool names (e.g. Read -> read_file)
+                resolved = (
+                    self.tool_controller.resolve_tool_name(nm)
+                    if self.tool_controller
+                    else nm
+                )
+                buf.name = resolved or nm
             new_args = fn.get("arguments") or ""
 
             # DEFENSIVE: Block only truly undeclared tools. Do not block by
@@ -410,7 +565,7 @@ class StreamTranslator:
                     f"\n[PROXY BLOCKED undeclared tool '{buf.name}' "
                     f"with args: {new_args or buf.pre_start_buffer}]\n"
                 )
-                yield self._emit(
+                yield from self._emit(
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
@@ -454,7 +609,7 @@ class StreamTranslator:
                         if self._repetition_count >= self._MAX_REPETITIONS:
                             yield from self._close_any_open()
                             yield from self._open_text_block()
-                            yield self._emit(
+                            yield from self._emit(
                                 "content_block_delta",
                                 {
                                     "type": "content_block_delta",
@@ -474,7 +629,7 @@ class StreamTranslator:
                             return
 
                 emit_name = self.tool_id_map.original_tool_name(buf.name or "")
-                yield self._emit(
+                yield from self._emit(
                     "content_block_start",
                     {
                         "type": "content_block_start",
@@ -517,7 +672,7 @@ class StreamTranslator:
         self._finished = True
         # Defensive: close anything still open.
         yield from self._close_any_open()
-        yield self._emit(
+        yield from self._emit(
             "message_delta",
             {
                 "type": "message_delta",
@@ -531,4 +686,4 @@ class StreamTranslator:
                 },
             },
         )
-        yield self._emit("message_stop", {"type": "message_stop"})
+        yield from self._emit("message_stop", {"type": "message_stop"})

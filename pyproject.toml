@@ -1,6 +1,6 @@
 [project]
 name = "nvd-claude-proxy"
-version = "0.4.4"
+version = "0.8.6"
 description = "Run Claude Code (and any Anthropic SDK client) on NVIDIA NIM models via a local proxy."
 requires-python = ">=3.11"
 readme = "README.md"
@@ -38,6 +38,10 @@ dependencies = [
   "orjson>=3.10",
   "typer>=0.12",
   "rich>=13.0",
+  "json-repair>=0.30.0",
+  "json5>=0.9.28",
+  "sqlalchemy>=2.0",
+  "aiosqlite>=0.20",
 ]
 
 [project.urls]
@@ -78,9 +82,12 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.package-data]
-"nvd_claude_proxy" = ["py.typed"]
-"nvd_claude_proxy.data" = ["*.yaml"]
+"nvd_claude_proxy" = ["py.typed", "data/*.yaml", "static/index.html", "static/js/*.js"]
+
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

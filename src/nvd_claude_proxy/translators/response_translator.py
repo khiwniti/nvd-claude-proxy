@@ -6,7 +6,9 @@ import json
 import re
 
 from ..util.ids import new_message_id, new_thinking_signature
+from ..util.tool_args_parser import parse_tool_arguments
 from .tool_translator import ToolIdMap
+from .transformers import TransformerChain
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 _FENCE_RE = re.compile(r"^```[a-z]*\s*", re.MULTILINE)
@@ -71,9 +73,19 @@ def _extract_tool_args(raw: str) -> dict:
                         except json.JSONDecodeError:
                             break
         break
+    # Strategy 5 (ported from claude-code-router): multi-strategy JSON repair
+    # handles truncated JSON, fence stripping, etc.
+    repaired = parse_tool_arguments(raw)
+    if repaired and repaired != "{}":
+        try:
+            result = json.loads(repaired)
+            return result if isinstance(result, dict) else {"value": result}
+        except json.JSONDecodeError:
+            pass
     # All strategies failed — return _raw_arguments so Claude Code gets the
     # unparseable string rather than an empty dict.
     return {"_raw_arguments": raw}
+
 
 
 _FINISH_TO_STOP: dict[str | None, str] = {
@@ -86,37 +98,50 @@ _FINISH_TO_STOP: dict[str | None, str] = {
 }
 
 
-def _extract_thinking(content: str | None, reasoning: str | None) -> tuple[str | None, str]:
-    """Return `(thinking_text, remaining_content)`.
+def _extract_thinking(content: str | None, reasoning: str | None, thinking_obj: dict | None = None) -> tuple[str | None, str, str | None]:
+    """Return `(thinking_text, remaining_content, signature)`.
 
     Accepts both `reasoning_content` and inline `<think>…</think>` since different
     NIM versions surface reasoning differently for the same model.
     """
+    signature = thinking_obj.get("signature") if thinking_obj else None
     if reasoning:
-        return reasoning, content or ""
+        return reasoning, content or "", signature
+    if thinking_obj and thinking_obj.get("content"):
+        return thinking_obj["content"], content or "", signature
     if content:
         m = _THINK_RE.search(content)
         if m:
-            return m.group(1).strip(), _THINK_RE.sub("", content, count=1).lstrip()
-    return None, content or ""
+            return m.group(1).strip(), _THINK_RE.sub("", content, count=1).lstrip(), signature
+    return None, content or "", signature
 
 
-def translate_response(openai_resp: dict, anthropic_model: str, tool_id_map: ToolIdMap) -> dict:
+def translate_response(
+    openai_resp: dict, 
+    anthropic_model: str, 
+    tool_id_map: ToolIdMap,
+    tool_controller: Any | None = None,
+    transformer_chain: TransformerChain | None = None,
+) -> dict:
+    if transformer_chain:
+        openai_resp = transformer_chain.transform_response(openai_resp)
+
     choices = openai_resp.get("choices") or [{}]
     choice = choices[0]
     msg = choice.get("message") or {}
     content_blocks: list[dict] = []
 
-    thinking_text, remaining = _extract_thinking(
+    thinking_text, remaining, signature = _extract_thinking(
         msg.get("content"),
         msg.get("reasoning_content"),
+        msg.get("thinking"),
     )
     if thinking_text:
         content_blocks.append(
             {
                 "type": "thinking",
                 "thinking": thinking_text,
-                "signature": new_thinking_signature(),
+                "signature": signature or new_thinking_signature(),
             }
         )
     if remaining:
@@ -128,13 +153,28 @@ def translate_response(openai_resp: dict, anthropic_model: str, tool_id_map: Too
         tool_input = _extract_tool_args(raw_args)
         anth_id = tool_id_map.openai_to_anthropic(tc.get("id", ""))
         sanitized_name = fn.get("name", "")
-        original_name = tool_id_map.original_tool_name(sanitized_name)
+        # Fuzzy resolve hallucinated tool names
+        resolved = (
+            tool_controller.resolve_tool_name(sanitized_name)
+            if tool_controller
+            else sanitized_name
+        )
+        name_to_use = resolved or sanitized_name
+        original_name = tool_id_map.original_tool_name(name_to_use)
+        
+        # Resolve hallucinated argument keys
+        final_input = (
+            tool_controller.resolve_tool_arguments(original_name, tool_input)
+            if tool_controller
+            else tool_input
+        )
+        
         content_blocks.append(
             {
                 "type": "tool_use",
                 "id": anth_id,
                 "name": original_name,
-                "input": tool_input,
+                "input": final_input,
             }
         )
 

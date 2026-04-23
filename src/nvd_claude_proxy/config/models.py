@@ -17,10 +17,22 @@ class ReasoningConfig:
 
 
 @dataclass(slots=True)
+class RouterConfig:
+    default: str = "claude-opus-4-7"
+    background: str | None = None
+    think: str | None = None
+    long_context: str | None = None
+    long_context_threshold: int = 60000
+    web_search: str | None = None
+    vision: str | None = None
+
+
+@dataclass(slots=True)
 class ToolConfig:
     supports: bool = True
     parallel: bool = True
     arg_validation: bool = True
+    exit_tool_enabled: bool = False
 
 
 @dataclass(slots=True)
@@ -50,6 +62,7 @@ class ModelRegistry:
     prefix_fallbacks: dict[str, str] = field(default_factory=dict)
     default_big: str = "claude-opus-4-7"
     default_small: str = "claude-haiku-4-5"
+    router: RouterConfig = field(default_factory=RouterConfig)
 
     def resolve_chain(self, claude_model_name: str | None) -> list[CapabilityManifest]:
         """Return the primary spec followed by any failover specs, deduped."""
@@ -116,6 +129,7 @@ def load_model_registry(path: str | Path | None = None) -> ModelRegistry:
             ),
             tools=ToolConfig(
                 supports=spec_data.get("supports_tools", True),
+                exit_tool_enabled=spec_data.get("exit_tool_enabled", False),
             ),
             max_context=spec_data.get("max_context", 1000000),
             max_output=spec_data.get("max_output", 16384),
@@ -125,9 +139,22 @@ def load_model_registry(path: str | Path | None = None) -> ModelRegistry:
             supports_reasoning=spec_data.get("supports_reasoning", False),
         )
 
+    # Router config.
+    router_data = data.get("router", {})
+    router = RouterConfig(
+        default=(data.get("defaults") or {}).get("big", "claude-opus-4-7"),
+        background=router_data.get("background"),
+        think=router_data.get("think"),
+        long_context=router_data.get("long_context"),
+        long_context_threshold=router_data.get("long_context_threshold", 60000),
+        web_search=router_data.get("web_search"),
+        vision=router_data.get("vision"),
+    )
+
     return ModelRegistry(
         specs=specs,
         prefix_fallbacks=data.get("prefix_fallbacks") or {},
         default_big=(data.get("defaults") or {}).get("big", "claude-opus-4-7"),
         default_small=(data.get("defaults") or {}).get("small", "claude-haiku-4-5"),
+        router=router,
     )

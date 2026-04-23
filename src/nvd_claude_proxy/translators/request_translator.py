@@ -18,13 +18,12 @@ from .tool_translator import (
     anthropic_tools_to_openai,
 )
 from .vision_translator import anthropic_image_to_openai
+from .transformers import TransformerChain
 
 # Leave this many tokens of headroom between estimated input+output and the
-# model's hard context window. Real-world drift observed:
-#   Claude Code /init with 273 tools: cl100k estimate ~93k, NVIDIA actual 99.7k
-#   Context7 MCP query: cl100k estimate ~121k, NVIDIA actual 132k  (⇒ ~9% under)
-# 64k headroom (up from 16k) absorbs the worst-case undercount on 1M windows.
-_CONTEXT_HEADROOM = 65_536
+# model's hard context window. 8k is enough to absorb cl100k vs Nemotron 
+# tokenization drift while maximizing usable space in 128k windows.
+_CONTEXT_HEADROOM = 8192
 # Minimum we will ever allow for output even under heavy clamping so the
 # model has room for at least a brief answer.
 _MIN_OUTPUT = 256
@@ -215,6 +214,7 @@ def translate_request(
     anthropic_body: dict,
     spec: CapabilityManifest,
     tool_id_map: ToolIdMap,
+    transformer_chain: TransformerChain | None = None,
 ) -> dict:
     openai_messages: list[dict] = []
     system_content = _flatten_system(anthropic_body.get("system"), spec)
@@ -317,4 +317,8 @@ def translate_request(
         payload["chat_template_kwargs"] = {
             "enable_thinking": thinking is not None and thinking is not False
         }
+
+    if transformer_chain:
+        payload = transformer_chain.transform_request(payload)
+
     return payload

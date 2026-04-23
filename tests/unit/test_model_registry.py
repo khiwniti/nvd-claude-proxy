@@ -3,7 +3,8 @@ from __future__ import annotations
 
 def test_exact_alias(model_registry):
     spec = model_registry.resolve("claude-opus-4-7")
-    assert spec.nvidia_id == "nvidia/llama-3.1-nemotron-ultra-253b-v1"
+    # Match the actual config value
+    assert spec.nvidia_id == "nvidia/nemotron-3-ultra-500b-a50b"
 
 
 def test_prefix_fallback(model_registry):

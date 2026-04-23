@@ -199,3 +199,18 @@ class ToolIdMap:
 
     def original_tool_name(self, sanitized: str) -> str:
         return self._sanitized_to_original.get(sanitized, sanitized)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "a_to_o": self._a_to_o,
+            "o_to_a": self._o_to_a,
+            "sanitized_to_original": self._sanitized_to_original,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ToolIdMap:
+        instance = cls()
+        instance._a_to_o = data.get("a_to_o", {})
+        instance._o_to_a = data.get("o_to_a", {})
+        instance._sanitized_to_original = data.get("sanitized_to_original", {})
+        return instance

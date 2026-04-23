@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     proxy_port: int = Field(8787, alias="PROXY_PORT")
     proxy_api_key: str | None = Field(default=None, alias="PROXY_API_KEY")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
-    model_config_path: str = Field("config/models.yaml", alias="MODEL_CONFIG_PATH")
+    model_config_path: str | None = Field(default=None, alias="MODEL_CONFIG_PATH")
     request_timeout_seconds: float = Field(600.0, alias="REQUEST_TIMEOUT_SECONDS")
     max_retries: int = Field(2, alias="MAX_RETRIES")
     # Per-client rate limiting (disabled by default; set > 0 to enable).
