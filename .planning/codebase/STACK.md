@@ -1,76 +1,34 @@
-# Technology Stack
+# Tech Stack
 
-**Analysis Date:** 2026-04-21
+**Last Updated:** 2026-04-23 (v0.8.7)
 
-## Languages
+## Core Language & Runtime
+- **Python 3.11+**: Primary runtime for the proxy server.
+- **FastAPI / Starlette**: High-performance async web framework for API routing and middleware.
+- **Uvicorn / uvloop**: Lightning-fast ASGI server and event loop for production deployment.
 
-**Primary:**
-- Python 3.11+ (`requires-python >=3.11`) - application/runtime code in `nvd-claude-proxy/src/nvd_claude_proxy/`.
+## Persistence & State
+- **SQLite**: Reliable local database for persistent session storage and model mappings.
+- **SQLAlchemy (Async)**: Modern ORM for database interactions.
+- **aiosqlite**: Non-blocking SQLite driver.
 
-**Secondary:**
-- YAML - model/capability configuration in `nvd-claude-proxy/config/models.yaml`.
-- Markdown - operational docs in `nvd-claude-proxy/README.md`, `nvd-claude-proxy/docs/ANTHROPIC_COMPAT.md`.
+## Translation & Repair
+- **json-repair**: Proactive library for fixing truncated or malformed JSON in tool calls.
+- **json5**: Relaxed JSON parsing for handling model hallucinations.
+- **tiktoken**: Precise token counting and estimation for context window management.
+- **Pydantic v2**: Strict schema validation for all API inputs and internal data models.
 
-## Runtime
+## Client & Networking
+- **httpx**: Resilient async HTTP client with advanced retry and stream-parsing capabilities.
+- **WebSocket (FastAPI)**: Real-time telemetry for the Live Monitor dashboard.
 
-**Environment:**
-- CPython (tested in CI on 3.11 and 3.12 via `.github/workflows/ci-cd.yml`; Docker image uses `python:3.12-slim` in `nvd-claude-proxy/Dockerfile`).
+## Frontend (Dashboard)
+- **Tailwind CSS**: Modern utility-first styling for the dark-mode console.
+- **React / JavaScript**: Dynamic SPA for managing sessions and visual model mapping.
+- **Lucide Icons**: Professional iconography for the UI.
 
-**Package Manager:**
-- `pip` (install flow in `nvd-claude-proxy/Makefile` and CI).
-- Lockfile: unknown/not detected (`requirements*.txt`, `poetry.lock`, `uv.lock` not detected at repo root or package root).
-
-## Frameworks
-
-**Core:**
-- FastAPI (`fastapi>=0.115`) - HTTP API and routing in `nvd-claude-proxy/src/nvd_claude_proxy/app.py`, `nvd-claude-proxy/src/nvd_claude_proxy/routes/`.
-- Uvicorn (`uvicorn[standard]>=0.32`) - ASGI server entrypoint via `nvd-claude-proxy/src/nvd_claude_proxy/main.py`.
-- Pydantic + pydantic-settings - schema/env configuration in `nvd-claude-proxy/src/nvd_claude_proxy/config/settings.py`.
-
-**Testing:**
-- Pytest (+ `pytest-asyncio`, `pytest-httpx`, `respx`) from `nvd-claude-proxy/pyproject.toml`.
-
-**Build/Dev:**
-- Setuptools build backend in `nvd-claude-proxy/pyproject.toml`.
-- Ruff + mypy for static quality (`nvd-claude-proxy/pyproject.toml`, `nvd-claude-proxy/Makefile`).
-- Typer + Rich for CLI UX in `nvd-claude-proxy/src/nvd_claude_proxy/cli/main.py`.
-
-## Key Dependencies
-
-**Critical runtime:**
-- `httpx` - outbound NVIDIA API transport in `nvd-claude-proxy/src/nvd_claude_proxy/clients/nvidia_client.py`.
-- `structlog` - JSON structured logs in `nvd-claude-proxy/src/nvd_claude_proxy/app.py`.
-- `orjson` - response serialization (`ORJSONResponse`) in `nvd-claude-proxy/src/nvd_claude_proxy/app.py`.
-- `tiktoken` - token approximation in `nvd-claude-proxy/src/nvd_claude_proxy/util/tokens.py`.
-- `Pillow` - image transcoding path referenced by vision translators and Docker system libs (`nvd-claude-proxy/Dockerfile`).
-
-**Optional/runtime feature deps:**
-- `prometheus-client` (`[metrics]` extra) used by `nvd-claude-proxy/src/nvd_claude_proxy/util/metrics.py`.
-- `pypdf` (`[pdf]` extra) used by `nvd-claude-proxy/src/nvd_claude_proxy/util/pdf_extractor.py`.
-
-## Configuration
-
-**Environment:**
-- Pydantic settings load from local `.env` and user config env files (`nvd-claude-proxy/src/nvd_claude_proxy/config/settings.py`).
-- Runtime env vars documented in `nvd-claude-proxy/README.md` (e.g., `NVIDIA_API_KEY`, `NVIDIA_BASE_URL`, `MODEL_CONFIG_PATH`).
-
-**Build:**
-- Python packaging via `pyproject.toml` (`setuptools.build_meta`).
-- Container build in `nvd-claude-proxy/Dockerfile`.
-- Compose runtime in `nvd-claude-proxy/docker-compose.yml`.
-- CI pipeline in `nvd-claude-proxy/.github/workflows/ci-cd.yml`.
-
-## Platform Requirements
-
-**Development:**
-- Python 3.11+.
-- Local env file present support (`nvd-claude-proxy/.env.example`); actual `.env` exists (contents intentionally not inspected).
-- Optional Docker runtime via `docker compose`.
-
-**Production:**
-- HTTP service target exposing proxy API (FastAPI + Uvicorn).
-- Deployment tooling detected: Docker image, Docker Compose, GitHub Actions CI/CD, PyPI publish (`nvd-claude-proxy/.github/workflows/ci-cd.yml`).
-
----
-
-*Stack analysis: 2026-04-21*
+## Development & Quality
+- **Ruff**: Extremely fast Python linter and formatter.
+- **mypy**: Static type checking for production safety.
+- **pytest-asyncio**: Comprehensive async test suite.
+- **structlog**: Structured JSON logging for observability.

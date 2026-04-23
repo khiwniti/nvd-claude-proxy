@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 
 from ..util.ids import new_message_id, new_thinking_signature
 from ..util.tool_args_parser import parse_tool_arguments

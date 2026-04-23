@@ -1,115 +1,38 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-04-21
-
-## Scope Assumption
-
-- This structure map targets `nvd-claude-proxy/` as the primary project in workspace `/Users/khiwn/custom-claude-code/`.
-- Workspace-level files (for example `.claude/`) exist but are treated as external tooling, not core product code.
-
-## Top-Level Directory Map
-
-```text
-nvd-claude-proxy/
-├── src/                  # Application source code (proxy, translation, CLI)
-├── tests/                # Unit and e2e test assets
-├── config/               # Runtime model configuration defaults
-├── scripts/              # Helper launch scripts
-├── .github/workflows/    # CI/CD workflows
-├── .venv/                # Local virtualenv (generated runtime dependency tree)
-├── README.md             # Product and operations documentation
-├── pyproject.toml        # Build/dependency/tooling configuration
-├── Makefile              # Developer command shortcuts (dev/test/lint/run)
-└── docker-compose.yml    # Containerized local/proxy runtime orchestration
-```
+**Last Updated:** 2026-04-23 (v0.8.7)
 
 ## Area Ownership and Purpose
 
 ### Application Runtime (`src/nvd_claude_proxy/`)
-- **Purpose:** production proxy runtime, protocol translation, and CLI tooling.
-- **Ownership by concern:**
-  - **App composition:** `src/nvd_claude_proxy/app.py`, `src/nvd_claude_proxy/main.py`
-  - **HTTP endpoints:** `src/nvd_claude_proxy/routes/`
-  - **Protocol adapters:** `src/nvd_claude_proxy/translators/`
-  - **NVIDIA upstream integration:** `src/nvd_claude_proxy/clients/`
-  - **Runtime config/capabilities:** `src/nvd_claude_proxy/config/`
-  - **Cross-cutting middleware:** `src/nvd_claude_proxy/middleware/`
-  - **Common support utilities:** `src/nvd_claude_proxy/util/`
-  - **Error normalization:** `src/nvd_claude_proxy/errors/`
-  - **CLI tooling:** `src/nvd_claude_proxy/cli/main.py`
-  - **Bundled data:** `src/nvd_claude_proxy/data/models.yaml`
+- **App Core:** `app.py`, `main.py`
+- **Session DB:** `db/database.py`, `db/models.py`
+- **Dashboard API:** `routes/dashboard.py`
+- **Translation Engine:** `translators/transformers.py`, `translators/stream_translator.py`
+- **Isolated State:** `services/session_service.py`
+- **Session Routing:** `middleware/session_middleware.py`
+- **Static Assets:** `static/index.html`, `static/js/dashboard.js`
+- **Configuration:** `config/settings.py`, `data/models.yaml`
 
-### Testing (`tests/`)
-- **Purpose:** behavior validation across translation, routes, middleware, clients.
-- **Key layout:**
-  - `tests/unit/`: unit and route-level integration-style tests (for example `test_stream_translator.py`, `test_routes_anthropic_compat.py`).
-  - `tests/e2e/`: manual/e2e guidance assets (`test_with_claude_code.md`).
-  - `tests/conftest.py`: path bootstrap and test environment defaults.
+### Deployment & Packaging
+- **`MANIFEST.in`**: Ensures static assets and data files are included in the PyPI wheel.
+- **`pyproject.toml`**: Unified project configuration and dependency tree.
+- **`Makefile`**: Developer automation and release management.
 
-### Configuration and Delivery
-- `config/models.yaml`: default model aliases and capability metadata consumed by `src/nvd_claude_proxy/config/models.py`.
-- `.github/workflows/ci-cd.yml`: CI automation pipeline.
-- `pyproject.toml`: dependency graph, entrypoints (`nvd-claude-proxy`, `ncp`), test/lint config.
-- `README.md`: operational contract for installation, env vars, endpoints, and troubleshooting.
+## Key Directory Map
 
-## Key Module Index
-
-### Entry Points
-- `src/nvd_claude_proxy/main.py`: process entry for server runtime.
-- `src/nvd_claude_proxy/cli/main.py`: command-line entry for `ncp`.
-- `src/nvd_claude_proxy/app.py`: app factory used by Uvicorn.
-
-### Core Request Path
-- `src/nvd_claude_proxy/routes/messages.py`
-- `src/nvd_claude_proxy/translators/request_translator.py`
-- `src/nvd_claude_proxy/clients/nvidia_client.py`
-- `src/nvd_claude_proxy/translators/response_translator.py`
-- `src/nvd_claude_proxy/translators/stream_translator.py`
-
-### Support and Ops
-- `src/nvd_claude_proxy/routes/models.py`
-- `src/nvd_claude_proxy/routes/count_tokens.py`
-- `src/nvd_claude_proxy/routes/metrics_route.py`
-- `src/nvd_claude_proxy/middleware/logging.py`
-- `src/nvd_claude_proxy/middleware/rate_limiter.py`
-- `src/nvd_claude_proxy/middleware/body_limit.py`
-
-## Naming and Organization Patterns
-
-- Python package follows `src` layout: code under `src/nvd_claude_proxy/`.
-- Functional verticals use plural directories by role: `routes`, `translators`, `middleware`, `clients`, `util`.
-- Test modules follow `test_*.py` naming under `tests/unit/`.
-- Config by file type:
-  - Python project tooling in `pyproject.toml`.
-  - Model metadata in YAML (`config/models.yaml`, `src/nvd_claude_proxy/data/models.yaml`).
-
-## Where to Add New Code
-
-### New API behavior
-- Add endpoint orchestrator in `src/nvd_claude_proxy/routes/`.
-- Add protocol transform logic in `src/nvd_claude_proxy/translators/`.
-- Add shared helpers in `src/nvd_claude_proxy/util/` only if reused by multiple areas.
-- Add tests in `tests/unit/` using neighboring module naming (for example `test_<module>.py`).
-
-### New upstream/provider integration
-- Add client adapter under `src/nvd_claude_proxy/clients/`.
-- Keep route modules provider-agnostic by delegating transport logic to client modules.
-
-### New cross-cutting request policies
-- Implement middleware in `src/nvd_claude_proxy/middleware/`.
-- Register middleware ordering in `src/nvd_claude_proxy/app.py`.
-
-### New CLI capabilities
-- Extend `src/nvd_claude_proxy/cli/main.py` with command groups and helper functions.
-- Reuse config/model loading helpers already in CLI module.
-
-## Special Directories and Generated Areas
-
-- `src/nvd_claude_proxy.egg-info/`: packaging metadata generated by editable/install operations; should not be treated as source-of-truth code.
-- `.venv/`: local environment and installed packages; generated and environment-specific.
-- `.pytest_cache/`: test runner cache; generated.
-- `.git/`: repository metadata; non-source.
-
----
-
-*Structure analysis: 2026-04-21*
+```text
+nvd-claude-proxy/
+├── src/nvd_claude_proxy/
+│   ├── db/               # SQLite persistence layer
+│   ├── routes/           # FastAPI endpoints (Messages, Dashboard)
+│   ├── translators/      # Modular Transformer Pipeline
+│   ├── services/         # Persistent session isolation
+│   ├── middleware/       # Session interception and security
+│   ├── static/           # Dashboard Web UI (Showcase)
+│   └── util/             # Token metrics, cost estimation, headers
+├── .planning/            # Architecture and roadmap docs
+├── docs/                 # Detailed Design documents
+├── tests/                # Async test suite
+└── MANIFEST.in           # Package distribution rules
+```

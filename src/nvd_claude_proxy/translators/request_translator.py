@@ -5,9 +5,13 @@ from __future__ import annotations
 import json as _json
 from typing import Any
 
+import structlog
+
 from ..config.models import CapabilityManifest
 from ..util.pdf_extractor import document_block_to_text
 from ..util.tokens import approximate_tokens
+
+_log = structlog.get_logger("nvd_claude_proxy.translator")
 from .thinking_translator import (
     inject_reasoning_toggle,
     strip_prior_thinking_from_history,
@@ -44,6 +48,38 @@ class ContextOverflowError(ValueError):
             f"{model} context window ({max_context} tokens). "
             "Reduce messages or tool schemas."
         )
+
+
+def _truncate_messages_to_fit(
+    messages: list[dict],
+    tools: list[dict],
+    max_context: int,
+    min_output: int,
+) -> tuple[list[dict], int]:
+    """Drop oldest non-system turns until the input estimate fits the window.
+
+    Strategy: skip over any leading system messages, then remove one message at
+    a time from the oldest end.  Stops as soon as the estimate is below the
+    threshold or only one non-system message remains (can't truncate further).
+
+    Returns (truncated_messages, new_est_input).
+    """
+    threshold = max_context - min_output
+
+    # Index of the first non-system message.
+    first_non_system = 0
+    while first_non_system < len(messages) and messages[first_non_system].get("role") == "system":
+        first_non_system += 1
+
+    msgs = list(messages)
+    while len(msgs) > first_non_system + 1:
+        est = approximate_tokens({"messages": msgs, "tools": tools})
+        if est < threshold:
+            return msgs, est
+        # Drop the oldest non-system message.
+        msgs = msgs[:first_non_system] + msgs[first_non_system + 1:]
+
+    return msgs, approximate_tokens({"messages": msgs, "tools": tools})
 
 
 _TOOL_DISCIPLINE_ADDENDUM = """\n\n---\nTool use discipline (IMPORTANT):\n- Only call a tool when you are certain it is the correct tool for the task.\n- ALWAYS use the native tool-calling API. NEVER output tags like `command-name>` or `command-arguments>` in your response.\n- When calling the `Skill` tool, use the EXACT skill name shown in the tool description (e.g. \"/vercel:env\", not \"vercel\"). Do not guess skill names.\n- Provide ALL required parameters for every tool call. Check the tool schema before calling.\n- If you are unsure which tool to use, ask the user for clarification instead of guessing.\n- Do not call design or UI tools (e.g. `pencil`) for non-design tasks such as file migration or code editing.\n---"""
@@ -267,10 +303,21 @@ def translate_request(
     # Estimate with cl100k_base over *everything* that will be billed as input:
     # messages (system+user+assistant+tool) and tool schemas.
     est_input = approximate_tokens({"messages": openai_messages, "tools": mapped_tools})
-    # Pre-flight guard: if the input alone fills the window, bail immediately
-    # with a structured error rather than letting NVIDIA return a cryptic 400.
+    # Pre-flight guard: if the input alone fills the window, try to salvage the
+    # request by dropping oldest turns before hard-failing.
     if est_input >= spec.max_context - _MIN_OUTPUT:
-        raise ContextOverflowError(est_input, spec.max_context, spec.alias)
+        original_est = est_input
+        openai_messages, est_input = _truncate_messages_to_fit(
+            openai_messages, mapped_tools, spec.max_context, _MIN_OUTPUT
+        )
+        if est_input >= spec.max_context - _MIN_OUTPUT:
+            raise ContextOverflowError(est_input, spec.max_context, spec.alias)
+        _log.warning(
+            "context.truncated",
+            before_tokens=original_est,
+            after_tokens=est_input,
+            model=spec.alias,
+        )
 
     context_budget = max(
         _MIN_OUTPUT,

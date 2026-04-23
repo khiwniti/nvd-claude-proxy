@@ -73,19 +73,26 @@ def _build_transformer_chain(
     return TransformerChain(transformers, on_fix=on_fix)
 
 
-def _check_proxy_key(request: Request) -> None:
-    # If session is already attached by SessionMiddleware, it's valid.
-    if getattr(request.state, "session", None):
-        return
+from ..util.cache_accounting import estimate_cache_tokens, has_cache_control_markers
 
+
+def _check_proxy_key(request: Request) -> None:
     s = request.app.state.settings
     if not s.proxy_api_key:
         return
+
+    # Trusted sessions must be authenticated. Freshly created sessions are 
+    # not authenticated until the key is checked once.
+    session_obj = getattr(request.state, "session", None)
+    if session_obj and getattr(session_obj, "authenticated", False):
+        return
+
     presented = request.headers.get("x-api-key")
     if not presented:
         auth = request.headers.get("authorization", "")
         if auth.lower().startswith("bearer "):
             presented = auth[7:].strip()
+
     if presented != s.proxy_api_key:
         raise HTTPException(
             401,
@@ -97,6 +104,10 @@ def _check_proxy_key(request: Request) -> None:
                 },
             },
         )
+    
+    # Mark session as authenticated for this process lifetime
+    if session_obj:
+        session_obj.authenticated = True
 
 
 def _parse_beta_header(request: Request) -> list[str]:
@@ -320,6 +331,13 @@ async def messages(request: Request):
             tool_controller=tool_controller,
             transformer_chain=transformer_chain
         )
+        # Wire cache accounting for cost tracking
+        if has_cache_control_markers(body):
+            acct = estimate_cache_tokens(body)
+            usage = out.setdefault("usage", {})
+            usage["cache_creation_input_tokens"] = acct.cache_creation_input_tokens
+            usage["cache_read_input_tokens"] = acct.cache_read_input_tokens
+
         _echo_stop_sequence(body, out)
         # Validate tool args from non-streaming response against declared schemas.
         failing_tools = tool_controller.validate_all(
@@ -367,6 +385,7 @@ async def messages(request: Request):
         )
         active_tool_id_map = tool_id_map
         active_payload = payload
+        active_tool_controller = tool_controller
         circuit_breaker = await get_circuit_breaker_registry().get_or_create("nvidia_api")
 
         try:
@@ -374,6 +393,9 @@ async def messages(request: Request):
                 if attempt_idx > 0:
                     active_tool_id_map = ToolIdMap()
                     active_payload = translate_request(body, try_spec, active_tool_id_map)
+                    active_tool_controller = ToolInvocationController(
+                        try_spec, active_tool_id_map, tool_schemas=tool_schemas
+                    )
                     _log.warning(
                         "stream.failover",
                         attempt=attempt_idx + 1,
@@ -383,7 +405,7 @@ async def messages(request: Request):
                 st = StreamTranslator(
                     model_name=requested_model,
                     tool_id_map=active_tool_id_map,
-                    tool_controller=tool_controller,
+                    tool_controller=active_tool_controller,
                     budget_tokens=budget_tokens,
                     estimated_input_tokens=est_input_tokens,
                     transformer_chain=transformer_chain,

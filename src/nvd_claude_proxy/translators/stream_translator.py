@@ -113,6 +113,8 @@ _FINISH_TO_STOP: dict[str, str] = {
 class _ToolBuf:
     """Accumulator for a single streamed OpenAI tool call."""
 
+    _MAX_ARGS_BYTES: int = 10 * 1024 * 1024  # 10 MB hard cap
+
     openai_id: str | None = None
     name: str | None = None
     anthropic_id: str | None = None
@@ -298,6 +300,13 @@ class StreamTranslator:
         """
         if not fragment:
             return
+
+        # Enforcement: size guard on accumulated arguments.
+        if len(buf._pre_json_acc) + len(fragment) > buf._MAX_ARGS_BYTES:
+            buf._json_mode = True  # force-stop accumulation
+            buf._pre_json_acc = ""
+            return
+
         if buf._json_mode:
             yield from self._emit(
                 "content_block_delta",

@@ -59,11 +59,17 @@ def get_use_model(
         return router.vision
 
     # 3. Web Search Scenario
+    # Only match Anthropic server-tool types (dated pattern) or explicit web search
+    # tool names. Substring "search" is intentionally NOT used — it matches
+    # legitimate code-search tools like search_files, grep_search, codebase_search.
     has_web_search = False
+    _WEB_SEARCH_TYPE_PREFIX = "web_search_"
+    _WEB_SEARCH_NAMES = frozenset({"web_search", "brave_search", "tavily_search", "bing_search"})
     tools = anthropic_body.get("tools") or []
     for tool in tools:
-        # Anthropic web_search tool or common naming patterns
-        if tool.get("type") == "web_search" or "search" in tool.get("name", "").lower():
+        ttype = tool.get("type") or ""
+        tname = (tool.get("name") or "").lower()
+        if ttype.startswith(_WEB_SEARCH_TYPE_PREFIX) or tname in _WEB_SEARCH_NAMES:
             has_web_search = True
             break
     
