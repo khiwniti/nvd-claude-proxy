@@ -1,6 +1,6 @@
 [project]
 name = "nvd-claude-proxy"
-version = "0.9.3"
+version = "1.0.1"
 description = "Run Claude Code (and any Anthropic SDK client) on NVIDIA NIM models via a local proxy."
 requires-python = ">=3.11"
 readme = "README.md"

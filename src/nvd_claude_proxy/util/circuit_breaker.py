@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from functools import wraps
-from typing import Callable, TypeVar, Generic, ParamSpec
+from typing import Callable, TypeVar, Generic, ParamSpec, Awaitable, Any
 
 import structlog
 
@@ -101,7 +101,7 @@ class CircuitBreaker(Generic[T]):
         return self._state
 
     @property
-    def metrics(self) -> dict[str, int | float]:
+    def metrics(self) -> dict[str, Any]:
         """Return circuit breaker metrics."""
         return {
             "state": self._state.value,
@@ -113,7 +113,7 @@ class CircuitBreaker(Generic[T]):
             "success_count": self._success_count,
         }
 
-    async def call(self, func: Callable[..., T]) -> T:
+    async def call(self, func: Callable[..., Awaitable[T]]) -> T:
         """Execute a function with circuit breaker protection.
 
         Args:
@@ -309,7 +309,7 @@ P = ParamSpec("P")
 def circuit_breaker(
     name: str,
     config: CircuitBreakerConfig | None = None,
-) -> Callable[[Callable[P, T]], Callable[P, T]]:
+) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T]]]:
     """Decorator to add circuit breaker protection to a function.
 
     Usage:
@@ -319,7 +319,7 @@ def circuit_breaker(
     """
     _breaker: CircuitBreaker | None = None
 
-    def decorator(func: Callable[P, T]) -> Callable[P, T]:
+    def decorator(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T]]:
         @wraps(func)
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
             nonlocal _breaker

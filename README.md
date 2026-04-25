@@ -40,6 +40,9 @@ ncp init
 
 # Launch proxy + Claude Code in one command
 ncp code
+
+# Launch the visual dashboard (New in v1.0!)
+ncp dashboard
 ```
 
 That's it. `ncp code` starts the proxy in the background, waits until it is
@@ -51,6 +54,7 @@ ready, then launches `claude`. When Claude exits the proxy stops cleanly.
 |---|---|
 | `ncp code` | Start proxy → launch Claude Code |
 | `ncp proxy` | Start proxy only (foreground) |
+| `ncp dashboard`| Launch the web-based management UI |
 | `ncp init` | Save `NVIDIA_API_KEY` to global config |
 | `ncp models list` | Show all configured model aliases |
 | `ncp kill` | Terminate any stuck proxy process on port 8788 |
@@ -134,19 +138,21 @@ Variables can be placed in:
 
 ## Features
 
-- **Full Anthropic SDK compatibility** — `anthropic-version` header, correct SSE `Content-Type`, proper `message_start` token counts
-- **Streaming** — strict Anthropic SSE event ordering with keepalive `ping` events every 15 s
-- **Tool use** — Anthropic tool definitions → OpenAI function-calling; parallel tool calls; schema sanitization for NIM
-- **Reasoning / thinking** — `thinking.budget_tokens` enforced; `<think>` tags stripped from non-streaming
-- **Vision** — JPEG/PNG pass-through; GIF/WEBP transcoded to PNG
-- **PDF documents** — base64 PDF blocks extracted to plain text (requires `[pdf]` extra)
-- **Model failover** — automatic retry on 5xx with the next model in the configured chain
-- **Context overflow guard** — pre-flight check returns a clean 400 before the request reaches NVIDIA when input exceeds the model's window
-- **Shared connection pool** — one `httpx.AsyncClient` for all requests (no per-request TLS setup)
-- **SIGHUP reload** — `kill -HUP <pid>` reloads `models.yaml` without restart
-- **Sliding-window rate limiter** — per-client, keyed on `metadata.user_id` or IP
-- **Prometheus metrics** — request count, token usage, latency histograms
-- **Cost estimation** — `cost_usd_est` field in every structured log line
+- **Full Anthropic SDK compatibility** — `anthropic-version` header, correct SSE `Content-Type`, proper `message_start` token counts.
+- **Persistent Session Manager** — SQLite-backed isolation of tool states and conversation histories via `sk-ncp-*` keys.
+- **Web Dashboard** — Modern dark-mode UI with **Live Monitor** dual-window stream visualization and model mapping.
+- **Modular Transformer Pipeline** — Chain-of-responsibility pattern for model-specific fixes like **JSON Repair** and control-character stripping.
+- **Agent Skills** — Native mapping of NVIDIA/OpenAI citations to Anthropic `web_search_tool_result` blocks.
+- **Streaming** — strict Anthropic SSE event ordering with keepalive `ping` events every 15 s.
+- **Tool use** — Parallel tool call buffering; schema validation and auto-sanitization for NIM models.
+- **Reasoning / thinking** — `thinking.budget_tokens` enforced; `<think>` tags captured and extracted in real-time.
+- **Vision** — JPEG/PNG pass-through; GIF/WEBP transcoded to PNG.
+- **PDF documents** — base64 PDF blocks extracted to plain text (requires `[pdf]` extra).
+- **Model failover** — automatic retry on 5xx with the next model in the configured chain.
+- **Context overflow guard** — pre-flight check returns a clean 400 before the request reaches NVIDIA; automatic message truncation to salvage requests.
+- **Shared connection pool** — one `httpx.AsyncClient` for all requests (no per-request TLS setup).
+- **SIGHUP reload** — `kill -HUP <pid>` reloads `models.yaml` without restart.
+- **Cost estimation** — `cost_usd_est` field in every structured log line and dashboard view.
 
 ---
 
@@ -204,9 +210,9 @@ docker compose up
 |---|---|
 | `NVIDIA_API_KEY Field required` | Run `ncp init` to save your key globally |
 | `proxy did not start in time` | Run `ncp kill` then `ncp code` again |
-| `132183 input tokens > 131072` | Context overflow — proxy now returns a clean 400 with explanation |
-| `429 rate_limit_error` | Hit NIM free-tier 40 RPM cap; wait 60 s or upgrade your NIM plan |
-| Claude Code shows tool errors | Check `ncp models list` — server tools are silently dropped |
+| 132183 input tokens > 131072 | Context overflow — proxy now attempts automatic message truncation |
+| 429 rate_limit_error | Hit NIM free-tier 40 RPM cap; wait 60 s or upgrade your NIM plan |
+| Claude Code shows tool errors | Open `ncp dashboard` and check **Live Monitor** to see repair results |
 
 ---
 
@@ -215,8 +221,8 @@ docker compose up
 - **Prompt caching** is silently ignored (NVIDIA NIM has no equivalent).
 - **`thinking.signature`** is proxy-local — do not forward proxy-generated thinking blocks to the real Anthropic API.
 - **DeepSeek-R1 + tool use** is unreliable; use Nemotron models for agentic workloads.
-- **Anthropic server tools** (`web_search`, `bash`, `computer`, `code_execution`, `memory`) are silently dropped.
 - **Batch and Files APIs** return 501 — NIM has no equivalent.
+
 
 ---
 

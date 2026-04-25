@@ -34,6 +34,7 @@ from ..util.cache_accounting import estimate_cache_tokens, has_cache_control_mar
 from ..util.circuit_breaker import get_circuit_breaker_registry, CircuitBreakerOpenError
 from ..config.models import CapabilityManifest
 from ..services.session_service import SessionService
+from ..util.degradation import DegradationContext
 
 # Import request validators for production hardening
 try:
@@ -52,9 +53,12 @@ _log = structlog.get_logger("nvd_claude_proxy.messages")
 _PING_INTERVAL_SECONDS = 15.0
 
 
-def _build_transformer_chain(spec: CapabilityManifest, on_fix: Callable[[str, Any], None] | None = None) -> TransformerChain:
+def _build_transformer_chain(
+    spec: CapabilityManifest, on_fix: Callable[[str, Any], None] | None = None
+) -> TransformerChain:
     """Instantiate a TransformerChain based on model capabilities."""
     from ..translators.transformers import Transformer
+
     transformers: list[Transformer] = []
     # Always clean control chars
     transformers.append(CharFixerTransformer(on_fix=on_fix))
@@ -152,31 +156,59 @@ def _build_tool_schemas(body: dict) -> dict[str, dict]:
 async def messages(request: Request):
     _check_proxy_key(request)
     body = await request.json()
+    request_id = new_request_id()
+
+    # ── Phase 4: Anthropic Version/Beta Negotiation ──────────────────────────
+    anthropic_version = request.headers.get("anthropic-version")
+    if anthropic_version and anthropic_version not in ("2023-06-01",):
+        _log.warning("messages.unsupported_version", version=anthropic_version)
+        return ORJSONResponse(
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": f"Unsupported anthropic-version: {anthropic_version}",
+                },
+            },
+            status_code=400,
+            headers=standard_response_headers(request_id),
+        )
+
+    betas = _parse_beta_header(request)
+    supported_betas = {
+        "prompt-caching-2024-07-31",
+        "computer-use-2024-10-22",
+        "pdfs-2024-09-25",
+        "token-counting-2024-11-01",
+    }
+    degradation = DegradationContext()
+    for b in betas:
+        if b not in supported_betas:
+            degradation.add_unsupported_beta(b)
 
     # ── Request Validation (Production Hardening) ─────────────────────────
     if _HAS_VALIDATORS:
         is_valid, result = validate_messages_request(body)
         if not is_valid:
             error_dict = result if isinstance(result, dict) else {}
-            rid = new_request_id()
             _log.warning(
                 "messages.validation_failed",
-                request_id=rid,
+                request_id=request_id,
                 error=error_dict.get("error", {}).get("message", ""),
             )
             return ORJSONResponse(
                 error_dict,
                 status_code=400,
-                headers=standard_response_headers(rid),
+                headers=standard_response_headers(request_id),
             )
         # Validation passed - use validated model for downstream processing
         from ..schemas.validators import MessagesRequest
+
         if isinstance(result, MessagesRequest):
             body = result.model_dump(exclude_none=True)
         _log.debug("messages.validated")
 
     registry = request.app.state.model_registry
-    request_id = new_request_id()
 
     def on_fix(fix_type: str, payload: Any) -> None:
         """Broadcast transformer fixes to the live monitor."""
@@ -199,6 +231,41 @@ async def messages(request: Request):
 
     spec_chain = registry.resolve_chain(requested_model)
     spec = spec_chain[0]
+
+    # ── Phase 4: Post-Routing Capability Validation ─────────────────────────
+    requires_tools = bool(body.get("tools"))
+    requires_vision = any(
+        b.get("type") == "image"
+        for m in body.get("messages", [])
+        for b in (m.get("content") or [])
+        if isinstance(b, dict)
+    )
+    if requires_tools and not spec.supports_tools:
+        degradation.provider_capability_mismatch.append("tools")
+        return ORJSONResponse(
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": f"Routed model {spec.alias} does not support tools.",
+                },
+            },
+            status_code=400,
+            headers=standard_response_headers(request_id),
+        )
+    if requires_vision and not getattr(spec, "supports_vision", True):
+        degradation.provider_capability_mismatch.append("vision")
+        return ORJSONResponse(
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": f"Routed model {spec.alias} does not support vision.",
+                },
+            },
+            status_code=400,
+            headers=standard_response_headers(request_id),
+        )
 
     # Load isolated state from session if available
     session_obj = getattr(request.state, "session", None)
@@ -239,6 +306,9 @@ async def messages(request: Request):
     user_id = (body.get("metadata") or {}).get("user_id")
 
     std_headers = standard_response_headers(request_id)
+
+    if degradation.has_degradation():
+        _log.warning("messages.degraded", request_id=request_id, degradation=degradation.to_dict())
 
     _log.info(
         "messages.request",

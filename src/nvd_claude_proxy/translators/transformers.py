@@ -48,11 +48,12 @@ class TransformerChain:
         return response
 
     def transform_stream_chunk(self, chunk: dict[str, Any]) -> dict[str, Any] | None:
+        current_chunk: dict[str, Any] | None = chunk
         for transformer in self.transformers:
-            chunk = transformer.transform_stream_chunk(chunk)
-            if chunk is None:
+            if current_chunk is None:
                 return None
-        return chunk
+            current_chunk = transformer.transform_stream_chunk(current_chunk)
+        return current_chunk
 
     def to_dict(self) -> list[dict[str, Any]]:
         return [t.to_dict() for t in self.transformers]
@@ -61,7 +62,7 @@ class TransformerChain:
     def from_dict(
         cls, data: list[dict[str, Any]], on_fix: Callable[[str, Any], None] | None = None
     ) -> TransformerChain:
-        transformers = []
+        transformers: list[Transformer] = []
         for item in data:
             t_type = item.get("type")
             if t_type == "CharFixerTransformer":
@@ -146,6 +147,9 @@ class JSONRepairTransformer:
 class WebSearchTransformer:
     """Detects annotations in OpenAI responses and maps to Anthropic web_search blocks."""
 
+    def __init__(self, on_fix: Callable[[str, Any], None] | None = None) -> None:
+        self.on_fix = on_fix
+
     def transform_request(self, payload: dict[str, Any]) -> dict[str, Any]:
         return payload
 
@@ -191,6 +195,9 @@ class ReasoningTransformer:
     """Captures <think> tags and maps reasoning_content to Anthropic thinking blocks."""
 
     _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+    def __init__(self, on_fix: Callable[[str, Any], None] | None = None) -> None:
+        self.on_fix = on_fix
 
     def transform_request(self, payload: dict[str, Any]) -> dict[str, Any]:
         return payload
@@ -255,7 +262,8 @@ class ExitToolTransformer:
         "using tools whenever appropriate.</system-reminder>"
     )
 
-    def __init__(self) -> None:
+    def __init__(self, on_fix: Callable[[str, Any], None] | None = None) -> None:
+        self.on_fix = on_fix
         self._exit_tool_index: int = -1
         self._exit_tool_response: str = ""
         self._exit_tool_detected: bool = False
@@ -355,3 +363,6 @@ class ExitToolTransformer:
             return modified
 
         return chunk
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": self.__class__.__name__}

@@ -201,10 +201,12 @@ class StreamTranslator:
             return
 
         if self.transformer_chain:
-            data = self.transformer_chain.transform_stream_chunk(data)
-            if data is None:
+            transformed_data = self.transformer_chain.transform_stream_chunk(data)
+            if transformed_data is None:
                 return
-        yield {"event": event, "data": data}
+            yield {"event": event, "data": transformed_data}
+        else:
+            yield {"event": event, "data": data}
 
     def _ensure_started(self) -> Iterator[dict]:
         if self._started:

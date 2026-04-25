@@ -62,8 +62,8 @@ Allows overriding default NIM models via the dashboard.
 | overrides | JSON | Specific capability flags |
 
 ## 5. Middleware Workflow
-1. **Request Interception**: Extract `Authorization` header.
-2. **Session Lookup**: Resolve `sk-ncp-*` to a database record.
-3. **Context Injection**: Initialize `ToolIdMap` and `TransformerChain` from persisted state.
-4. **Upstream Call**: Execute request to NVIDIA NIM.
-5. **State Persistence**: Update `tool_id_map` and `tokens_used` in background after response completion.
+1. **Request Interception**: Extract `x-api-key` (or `Authorization: Bearer`) header.
+2. **Session Lookup**: If key starts with `sk-ncp-`, resolve it to a database record.
+3. **Context Injection**: Initialize `ToolIdMap` and `TransformerChain` from the persisted SQLite state.
+4. **Upstream Call**: Translate and execute request to NVIDIA NIM.
+5. **State Persistence**: Sync updated `tool_id_map` and token metrics back to SQLite on request completion.

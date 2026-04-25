@@ -89,6 +89,8 @@ class NvidiaClient:
         Raises `httpx.HTTPStatusError` if the upstream returns >=400 before the
         stream begins.
         """
+        from nvd_claude_proxy.util.sse import SSEDecoder
+
         payload = {**payload}
         payload.setdefault("stream_options", {"include_usage": True})
         async with self._stream(payload) as resp:
@@ -99,16 +101,14 @@ class NvidiaClient:
                     request=resp.request,
                     response=resp,
                 )
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                if not line.startswith("data:"):
-                    continue
-                data = line[5:].strip()
-                if data == "[DONE]":
-                    return
-                try:
-                    yield json.loads(data)
-                except json.JSONDecodeError:
-                    # Defensive: drop malformed frames but keep the stream alive.
-                    continue
+
+            decoder = SSEDecoder()
+            async for chunk in resp.aiter_bytes():
+                events = decoder.decode(chunk)
+                for event in events:
+                    if event.data == "[DONE]":
+                        return
+                    try:
+                        yield json.loads(event.data)
+                    except json.JSONDecodeError:
+                        continue
