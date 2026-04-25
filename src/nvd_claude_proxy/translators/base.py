@@ -17,7 +17,7 @@ class BaseTransformer(abc.ABC):
 
     def transform_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Transform the outgoing request payload.
-        
+
         This is called *after* initial translation from Anthropic to OpenAI,
         but before it is sent to NVIDIA NIM.
         """
@@ -25,7 +25,7 @@ class BaseTransformer(abc.ABC):
 
     def transform_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
         """Transform the incoming non-streaming response.
-        
+
         This is called *after* initial translation from OpenAI to Anthropic,
         but before it is returned to the client.
         """
@@ -33,7 +33,7 @@ class BaseTransformer(abc.ABC):
 
     def transform_stream_chunk(self, chunk: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Transform a single streaming chunk (Anthropic-formatted).
-        
+
         Returning None will drop the chunk from the stream.
         """
         return chunk

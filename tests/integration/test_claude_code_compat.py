@@ -33,14 +33,16 @@ def mock_nvidia_response():
         "object": "chat.completion",
         "created": 1700000000,
         "model": "nvidia/nemotron-3-ultra-500b-a50b",
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": "Hello! I'm Claude.",
-            },
-            "finish_reason": "stop",
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! I'm Claude.",
+                },
+                "finish_reason": "stop",
+            }
+        ],
         "usage": {
             "prompt_tokens": 10,
             "completion_tokens": 6,
@@ -57,23 +59,27 @@ def mock_nvidia_tool_call_response():
         "object": "chat.completion",
         "created": 1700000000,
         "model": "nvidia/nemotron-3-ultra-500b-a50b",
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [{
-                    "index": 0,
-                    "id": "call_abc123",
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "arguments": '{"location": "San Francisco"}',
-                    },
-                }],
-            },
-            "finish_reason": "tool_calls",
-        }],
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "call_abc123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "San Francisco"}',
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
         "usage": {
             "prompt_tokens": 50,
             "completion_tokens": 15,
@@ -83,6 +89,7 @@ def mock_nvidia_tool_call_response():
 
 
 # ── Validation Tests ─────────────────────────────────────────────────────────
+
 
 class TestValidation:
     """Test request validation (no network required)."""
@@ -136,6 +143,7 @@ class TestValidation:
 
 # ── Error Handling Tests ──────────────────────────────────────────────────────
 
+
 class TestErrorHandling:
     """Test error handling."""
 
@@ -158,6 +166,7 @@ class TestErrorHandling:
 
 
 # ── Header/Metadata Tests ─────────────────────────────────────────────────────
+
 
 class TestHeaders:
     """Test response headers."""
@@ -183,6 +192,7 @@ class TestHeaders:
 
 # ── Token Counting Tests ──────────────────────────────────────────────────────
 
+
 class TestTokenCounting:
     """Test token counting endpoint."""
 
@@ -192,9 +202,7 @@ class TestTokenCounting:
         response = await client.post(
             "/v1/messages/count_tokens",
             json={
-                "messages": [
-                    {"role": "user", "content": "Hello, world!"}
-                ],
+                "messages": [{"role": "user", "content": "Hello, world!"}],
             },
         )
 
@@ -209,9 +217,7 @@ class TestTokenCounting:
         response = await client.post(
             "/v1/messages/count_tokens",
             json={
-                "messages": [
-                    {"role": "user", "content": "Hello"}
-                ],
+                "messages": [{"role": "user", "content": "Hello"}],
                 "tools": [
                     {
                         "name": "get_weather",
@@ -233,6 +239,7 @@ class TestTokenCounting:
 
 
 # ── Model Registry Tests ──────────────────────────────────────────────────────
+
 
 class TestModelRegistry:
     """Test model listing and resolution."""
@@ -260,6 +267,7 @@ class TestModelRegistry:
 
 # ── Security Tests ────────────────────────────────────────────────────────────
 
+
 class TestSecurity:
     """Test security features."""
 
@@ -270,16 +278,20 @@ class TestSecurity:
             "/v1/messages",
             json={
                 "model": "claude-opus-4-7",
-                "messages": [{
-                    "role": "user",
-                    "content": [{
-                        "type": "image",
-                        "source": {
-                            "type": "url",
-                            "url": "http://169.254.169.254/latest/meta-data/",
-                        },
-                    }],
-                }],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "url",
+                                    "url": "http://169.254.169.254/latest/meta-data/",
+                                },
+                            }
+                        ],
+                    }
+                ],
                 "max_tokens": 100,
             },
         )
@@ -307,6 +319,7 @@ class TestSecurity:
 
 # ── Health Check Tests ────────────────────────────────────────────────────────
 
+
 class TestHealthChecks:
     """Test health check endpoints."""
 
@@ -318,6 +331,7 @@ class TestHealthChecks:
 
 
 # ── OpenAPI Spec Tests ────────────────────────────────────────────────────────
+
 
 class TestOpenAPISpec:
     """Test OpenAPI specification endpoint."""

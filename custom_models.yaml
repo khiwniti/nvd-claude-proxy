@@ -1,0 +1,131 @@
+# Custom model configuration example
+defaults:
+  # Use Nemotron Ultra 253B for complex tasks
+  big: "claude-nemotron-ultra-253b"
+  # Use a faster model for simple tasks
+  small: "claude-haiku-4-5"
+
+# Router configuration
+router:
+  # Default model for general use
+  default: "claude-nemotron-ultra-253b"
+  # Model for background/low-priority tasks
+  background: "claude-haiku-4-5"
+  # Model when thinking/reasoning is needed
+  think: "claude-nemotron-ultra-253b"
+  # Model for long context tasks
+  long_context: "claude-sonnet-4-6"
+  long_context_threshold: 60000
+  # Model for vision tasks
+  vision: "claude-opus-4-7-vision"
+
+# Model aliases mapping to NVIDIA NIM IDs
+aliases:
+  # Nemotron Ultra 253B → Llama 3.1 Nemotron Ultra 253B (largest instruct model)
+  claude-nemotron-ultra-253b:
+    nvidia_id: "nvidia/llama-3.1-nemotron-ultra-253b-v1"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: true
+    reasoning_style: "detailed-thinking-v1"
+    max_context: 131072
+    max_output: 16384
+    failover_to:
+      - "claude-sonnet-4-6"
+      - "claude-haiku-4-5"
+
+  # Flagship → Llama 3.3 Nemotron Super 49B (Optimized for reasoning/tools)
+  claude-opus-4-7:
+    nvidia_id: "nvidia/llama-3.3-nemotron-super-49b-v1"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: true
+    reasoning_style: "detailed-thinking-v1"
+    max_context: 131072
+    max_output: 16384
+    failover_to:
+      - "claude-sonnet-4-6"
+      - "claude-haiku-4-5"
+
+  # Balanced → Nemotron-3 Super (120B MoE)
+  claude-sonnet-4-6:
+    nvidia_id: "nvidia/nemotron-3-super-120b-a12b"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: true
+    reasoning_style: "detailed-thinking-v1"
+    max_context: 131072
+    max_output: 16384
+    failover_to:
+      - "claude-haiku-4-5"
+
+  # Fast → Nemotron-3 Nano (30B MoE)
+  claude-haiku-4-5:
+    nvidia_id: "nvidia/nemotron-3-nano-30b-a3b"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: true
+    reasoning_style: "slash-think"
+    max_context: 131072
+    max_output: 16384
+
+  # Vision-capable (Llama 4 Maverick)
+  claude-opus-4-7-vision:
+    nvidia_id: "meta/llama-4-maverick-17b-128e-instruct"
+    supports_tools: true
+    supports_vision: true
+    supports_reasoning: false
+    max_context: 131072
+    max_output: 16384
+
+  # Qwen3 with thinking kwargs
+  claude-qwen3:
+    nvidia_id: "qwen/qwen3-235b-a22b"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: true
+    reasoning_style: "qwen-kwargs"
+    max_context: 131072
+    max_output: 16384
+
+  # DeepSeek reasoning (tools unreliable)
+  claude-r1:
+    nvidia_id: "deepseek-ai/deepseek-r1"
+    supports_tools: false
+    supports_vision: false
+    supports_reasoning: true
+    reasoning_style: "always-on"
+    temperature_override: 0.6
+    max_context: 131072
+    max_output: 16384
+
+  # Plain Llama 3.3 (no reasoning)
+  claude-llama-3-3:
+    nvidia_id: "meta/llama-3.3-70b-instruct"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: false
+    reasoning_style: "none"
+    max_context: 131072
+    max_output: 16384
+
+  # GLM-5.1
+  glm-5-1:
+    nvidia_id: "z-ai/glm-5.1"
+    supports_tools: true
+    supports_vision: false
+    supports_reasoning: false
+    reasoning_style: "none"
+    max_context: 131072
+    max_output: 16384
+
+# Prefix fallbacks for legacy Claude model names
+prefix_fallbacks:
+  "claude-3-5-sonnet": "claude-sonnet-4-6"
+  "claude-3-7-sonnet": "claude-sonnet-4-6"
+  "claude-sonnet-3":   "claude-sonnet-4-6"
+  "claude-3-5-haiku":  "claude-haiku-4-5"
+  "claude-haiku-3":    "claude-haiku-4-5"
+  "claude-opus-4-6":     "claude-opus-4-7"
+  "claude-3-opus":     "claude-opus-4-7"
+  "claude-opus-3":     "claude-opus-4-7"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import structlog
 
@@ -15,44 +15,52 @@ if TYPE_CHECKING:
 
 _log = structlog.get_logger("nvd_claude_proxy.session_service")
 
+
 class SessionService:
     @staticmethod
     def get_isolated_tool_id_map(session_obj: Session | None) -> ToolIdMap:
         """Load ToolIdMap from session, or create fresh if missing."""
         if not session_obj or not session_obj.tool_id_map_json:
             return ToolIdMap()
-        
+
         try:
             data = json.loads(session_obj.tool_id_map_json)
             return ToolIdMap.from_dict(data)
         except Exception:
-            _log.exception("session.tool_id_map_load_failed", session_id=getattr(session_obj, "id", "none"))
+            _log.exception(
+                "session.tool_id_map_load_failed", session_id=getattr(session_obj, "id", "none")
+            )
             return ToolIdMap()
 
     @staticmethod
     def get_isolated_transformer_chain(
-        session_obj: Session | None, 
-        spec: CapabilityManifest, 
-        build_default_fn: Callable[[CapabilityManifest, Callable[[str, Any], None] | None], TransformerChain],
-        on_fix: Callable[[str, Any], None] | None = None
+        session_obj: Session | None,
+        spec: CapabilityManifest,
+        build_default_fn: Callable[
+            [CapabilityManifest, Callable[[str, Any], None] | None], TransformerChain
+        ],
+        on_fix: Callable[[str, Any], None] | None = None,
     ) -> TransformerChain:
         """Load TransformerChain from session, or use default factory if missing."""
         if not session_obj or not session_obj.transformer_settings_json:
             return build_default_fn(spec, on_fix)
-        
+
         try:
             data = json.loads(session_obj.transformer_settings_json)
             return TransformerChain.from_dict(data, on_fix=on_fix)
         except Exception:
-            _log.exception("session.transformer_chain_load_failed", session_id=getattr(session_obj, "id", "none"))
+            _log.exception(
+                "session.transformer_chain_load_failed",
+                session_id=getattr(session_obj, "id", "none"),
+            )
             return build_default_fn(spec, on_fix)
 
     @staticmethod
     async def save_session_state(
-        session_id: int, 
-        tool_id_map: ToolIdMap, 
+        session_id: int,
+        tool_id_map: ToolIdMap,
         transformer_chain: TransformerChain,
-        tokens_inc: int = 0
+        tokens_inc: int = 0,
     ) -> None:
         """Persist serialized state back to SQLite."""
         async with async_session_factory() as db_session:

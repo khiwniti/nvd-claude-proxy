@@ -13,7 +13,6 @@ This module decides which model to use based on the request content:
 
 from __future__ import annotations
 
-from typing import Any
 
 import structlog
 
@@ -53,7 +52,7 @@ def get_use_model(
                     break
         if has_vision:
             break
-    
+
     if has_vision and router.vision:
         _log.info("router.scenario", scenario="vision", model=router.vision)
         return router.vision
@@ -72,7 +71,7 @@ def get_use_model(
         if ttype.startswith(_WEB_SEARCH_TYPE_PREFIX) or tname in _WEB_SEARCH_NAMES:
             has_web_search = True
             break
-    
+
     if has_web_search and router.web_search:
         _log.info("router.scenario", scenario="web_search", model=router.web_search)
         return router.web_search

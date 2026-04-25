@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from sqlalchemy import Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -22,13 +21,13 @@ class Session(Base):
     api_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     friendly_name: Mapped[str | None] = mapped_column(String(255))
     model_alias: Mapped[str | None] = mapped_column(String(255))
-    
+
     # JSON serialized configurations
     transformer_settings_json: Mapped[str | None] = mapped_column(Text)
     tool_id_map_json: Mapped[str | None] = mapped_column(Text)
-    
+
     tokens_used: Mapped[int] = mapped_column(Integer, default=0)
-    
+
     last_active: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )

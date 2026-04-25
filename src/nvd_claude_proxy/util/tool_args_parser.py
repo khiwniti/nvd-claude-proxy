@@ -44,7 +44,7 @@ def _strip_fences(s: str) -> str:
 def _strip_leading_prose(s: str) -> str:
     m = _JSON_START_RE.search(s)
     if m:
-        return s[m.start():]
+        return s[m.start() :]
     return s
 
 

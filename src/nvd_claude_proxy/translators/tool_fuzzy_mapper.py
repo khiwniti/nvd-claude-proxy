@@ -6,6 +6,7 @@ Ported from claude-code-router's tool repair strategies.
 from __future__ import annotations
 
 import difflib
+from typing import Any
 
 
 class FuzzyToolMapper:
@@ -33,7 +34,7 @@ class FuzzyToolMapper:
         "think": "thinking",
     }
 
-    # Common argument key hallucinations. 
+    # Common argument key hallucinations.
     # Key is tool name (or '*' for all), Value is a map of hallucinated -> real.
     STRICT_ARG_MAPPINGS = {
         "view_file": {
@@ -108,12 +109,12 @@ class FuzzyToolMapper:
 
     def map_arguments(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Attempt to map hallucinated argument keys to valid ones.
-        
+
         Example: read_file(path="/foo") -> read_file(file_path="/foo")
         """
         if tool_name not in self.STRICT_ARG_MAPPINGS:
             return arguments
-            
+
         mapping = self.STRICT_ARG_MAPPINGS[tool_name]
         new_args = {}
         for k, v in arguments.items():

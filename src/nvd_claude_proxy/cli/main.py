@@ -60,7 +60,7 @@ def _wait_for_proxy(
     host: str, port: int, timeout: float = 20.0, required_version: str | None = None
 ) -> bool:
     """Poll /healthz until the proxy is accepting connections.
-    
+
     If `required_version` is set, also verify the proxy's version matches.
     """
     url = _health_url(host, port)
@@ -276,7 +276,9 @@ def _run_proxy_and_claude(
         else:
             err_console.print(f"[yellow]⚠ Stale proxy detected on port {port}.[/yellow]")
             err_console.print(f"  Current version: [bold]{__version__}[/bold]")
-            err_console.print("  Run [cyan]ncp kill[/cyan] to stop the old instance, then try again.")
+            err_console.print(
+                "  Run [cyan]ncp kill[/cyan] to stop the old instance, then try again."
+            )
             raise typer.Exit(1)
     else:
         # ── start the proxy as a subprocess ───────────────────────────────────
@@ -285,6 +287,7 @@ def _run_proxy_and_claude(
         env["PROXY_PORT"] = str(port)
 
         import tempfile
+
         log_file = tempfile.NamedTemporaryFile(delete=False, prefix="ncp-proxy-", suffix=".log")
         log_path = Path(log_file.name)
 
@@ -366,7 +369,7 @@ def _run_proxy_and_claude(
     # Set output token limit to the model's max_output so Claude Code never
     # hits "response exceeded maximum" errors on long tool outputs.
     primary_spec = registry.resolve(model)
-    claude_env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", str(primary_spec.max_output))
+    claude_env["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(primary_spec.max_output)
 
     claude_cmd = [claude_bin, *claude_extra_args]
     console.print(f"[dim]Launching:[/dim] [cyan]{' '.join(claude_cmd)}[/cyan]\n")
@@ -852,7 +855,9 @@ def kill(
             pass
 
         if not pids:
-            console.print(f"[dim]Nothing listening on port {effective_port} or related to ncp found.[/dim]")
+            console.print(
+                f"[dim]Nothing listening on port {effective_port} or related to ncp found.[/dim]"
+            )
             return
 
         # Don't kill ourselves

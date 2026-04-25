@@ -16,7 +16,6 @@ import re
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
-from pydantic.types import SecretBytes
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -31,31 +30,44 @@ _MAX_TOTAL_REQUEST_SIZE_MB = 50
 _VALID_ROLES = frozenset({"user", "assistant", "system"})
 
 # Content block discriminators
-_CONTENT_BLOCK_TYPES = frozenset({
-    "text", "image", "document", "tool_use", "tool_result",
-    "thinking", "redacted_thinking", "server_tool_use"
-})
+_CONTENT_BLOCK_TYPES = frozenset(
+    {
+        "text",
+        "image",
+        "document",
+        "tool_use",
+        "tool_result",
+        "thinking",
+        "redacted_thinking",
+        "server_tool_use",
+    }
+)
 
 # Image source types
 _IMAGE_SOURCE_TYPES = frozenset({"base64", "url"})
 
 # Valid media types for images
-_VALID_IMAGE_MEDIA_TYPES = frozenset({
-    "image/jpeg", "image/png", "image/gif", "image/webp"
-})
+_VALID_IMAGE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
 
 # Tool types
 _TOOL_TYPES = frozenset({None, "custom", "function"})
 
 # Server tool types (should be dropped, not rejected)
-_SERVER_TOOL_TYPES = frozenset({
-    "web_search_20250305", "web_search_20250728",
-    "bash_20250124", "bash_20250728",
-    "computer_20250124", "computer_20250728",
-    "code_execution_20250522", "code_execution_20260120",
-    "text_editor_20250124", "text_editor_20250728",
-    "memory_20250818",
-})
+_SERVER_TOOL_TYPES = frozenset(
+    {
+        "web_search_20250305",
+        "web_search_20250728",
+        "bash_20250124",
+        "bash_20250728",
+        "computer_20250124",
+        "computer_20250728",
+        "code_execution_20250522",
+        "code_execution_20260120",
+        "text_editor_20250124",
+        "text_editor_20250728",
+        "memory_20250818",
+    }
+)
 
 # Service tier values
 _VALID_SERVICE_TIERS = frozenset({"auto", "standard_only"})
@@ -66,13 +78,16 @@ _TOOL_CHOICE_TYPES = frozenset({"auto", "any", "none", "tool"})
 
 # ── Sub-models ────────────────────────────────────────────────────────────────
 
+
 class CacheControlEphemeral(BaseModel):
     """cache_control block for content."""
+
     type: Literal["ephemeral"] = "ephemeral"
 
 
 class ImageSourceBase64(BaseModel):
     """Base64-encoded image source."""
+
     type: Literal["base64"] = "base64"
     media_type: str = Field(..., pattern=r"^image/.*$")
     data: str = Field(..., min_length=1)
@@ -83,6 +98,7 @@ class ImageSourceBase64(BaseModel):
         # Basic base64 validation
         try:
             import base64
+
             base64.b64decode(v, validate=True)
         except Exception as e:
             raise ValueError(f"Invalid base64 data: {e}") from e
@@ -91,6 +107,7 @@ class ImageSourceBase64(BaseModel):
 
 class ImageSourceURL(BaseModel):
     """URL-based image source."""
+
     type: Literal["url"] = "url"
     url: str = Field(..., min_length=1, max_length=8192)
 
@@ -99,6 +116,7 @@ class ImageSourceURL(BaseModel):
     def validate_url(cls, v: str) -> str:
         # Basic URL validation
         from urllib.parse import urlparse
+
         parsed = urlparse(v)
         if not parsed.scheme:
             raise ValueError("URL must include a scheme (http:// or https://)")
@@ -109,6 +127,7 @@ class ImageSourceURL(BaseModel):
 
 class ImageBlock(BaseModel):
     """Image content block."""
+
     type: Literal["image"] = "image"
     source: Union[ImageSourceBase64, ImageSourceURL]
     cache_control: CacheControlEphemeral | None = None
@@ -116,6 +135,7 @@ class ImageBlock(BaseModel):
 
 class TextBlock(BaseModel):
     """Text content block."""
+
     type: Literal["text"] = "text"
     text: str = Field(..., min_length=0)
     cache_control: CacheControlEphemeral | None = None
@@ -123,6 +143,7 @@ class TextBlock(BaseModel):
 
 class ToolUseBlock(BaseModel):
     """Tool use content block from assistant."""
+
     type: Literal["tool_use"] = "tool_use"
     id: str = Field(..., min_length=1, max_length=128)
     name: str = Field(..., min_length=1, max_length=_MAX_TOOL_NAME_LENGTH)
@@ -131,6 +152,7 @@ class ToolUseBlock(BaseModel):
 
 class ToolResultBlock(BaseModel):
     """Tool result content block from user."""
+
     type: Literal["tool_result"] = "tool_result"
     tool_use_id: str = Field(..., min_length=1)
     content: Any = ""  # Can be string, list, or other
@@ -140,6 +162,7 @@ class ToolResultBlock(BaseModel):
 
 class ThinkingBlock(BaseModel):
     """Thinking content block (extended thinking)."""
+
     type: Literal["thinking"] = "thinking"
     thinking: str = Field(..., min_length=1)
     signature: str = ""
@@ -147,12 +170,14 @@ class ThinkingBlock(BaseModel):
 
 class RedactedThinkingBlock(BaseModel):
     """Redacted thinking content block."""
+
     type: Literal["redacted_thinking"] = "redacted_thinking"
     data: str
 
 
 class DocumentSource(BaseModel):
     """Document source - base64, text, or URL."""
+
     type: Literal["base64", "text", "url"]
     media_type: str | None = None
     data: str | None = None
@@ -161,6 +186,7 @@ class DocumentSource(BaseModel):
 
 class DocumentBlock(BaseModel):
     """Document content block (PDF/text/URL)."""
+
     type: Literal["document"] = "document"
     source: DocumentSource
     title: str | None = None
@@ -184,6 +210,7 @@ ContentBlock = Annotated[
 
 class Message(BaseModel):
     """A single message in the conversation."""
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     role: Literal["user", "assistant", "system"]
@@ -201,6 +228,7 @@ class Message(BaseModel):
 
 class Tool(BaseModel):
     """Tool definition."""
+
     name: str = Field(..., min_length=1, max_length=_MAX_TOOL_NAME_LENGTH)
     description: str | None = None
     input_schema: dict[str, Any] = Field(default_factory=dict)
@@ -216,27 +244,27 @@ class Tool(BaseModel):
         # We allow up to 128 chars to be safe for complex MCP generators.
         pattern = r"^[a-zA-Z0-9_-]{1,128}$"
         if not re.fullmatch(pattern, v):
-            raise ValueError(
-                f"Tool name '{v}' is invalid. Must match {pattern}."
-            )
+            raise ValueError(f"Tool name '{v}' is invalid. Must match {pattern}.")
         return v
-
 
 
 class ToolChoiceAuto(BaseModel):
     """tool_choice: auto"""
+
     type: Literal["auto"] = "auto"
     disable_parallel_tool_use: bool | None = None
 
 
 class ToolChoiceAny(BaseModel):
     """tool_choice: any"""
+
     type: Literal["any"] = "any"
     disable_parallel_tool_use: bool | None = None
 
 
 class ToolChoiceTool(BaseModel):
     """tool_choice: tool"""
+
     type: Literal["tool"] = "tool"
     name: str
     disable_parallel_tool_use: bool | None = None
@@ -244,6 +272,7 @@ class ToolChoiceTool(BaseModel):
 
 class ToolChoiceNone(BaseModel):
     """tool_choice: none"""
+
     type: Literal["none"] = "none"
 
 
@@ -255,28 +284,32 @@ ToolChoice = Annotated[
 
 class ThinkingConfigEnabled(BaseModel):
     """Thinking enabled config."""
+
     type: Literal["enabled"] = "enabled"
     budget_tokens: int = Field(ge=1024, le=200000)
 
 
 class ThinkingConfigDisabled(BaseModel):
     """Thinking disabled config."""
+
     type: Literal["disabled"] = "disabled"
 
 
 # ── Main Request Model ────────────────────────────────────────────────────────
 
+
 class MessagesRequest(BaseModel):
     """Fully validated Anthropic Messages API request.
-    
+
     This model enforces both syntactic correctness (types, ranges) and
     semantic correctness (valid roles, non-empty required fields).
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     model: str = Field(..., min_length=1, max_length=_MAX_MODEL_NAME_LENGTH)
     messages: list[Message] = Field(..., min_length=1, max_length=_MAX_MESSAGES_PER_REQUEST)
-    
+
     system: str | list[dict[str, Any]] | None = Field(default=None)
     max_tokens: int = Field(default=1024, ge=1, le=200000)
     stream: bool = False
@@ -323,7 +356,7 @@ class MessagesRequest(BaseModel):
     def validate_tools(cls, v: list[Tool] | None) -> list[Tool] | None:
         if not v:
             return v
-        
+
         # Check for duplicate names
         names = [t.name for t in v]
         if len(names) != len(set(names)):
@@ -334,15 +367,14 @@ class MessagesRequest(BaseModel):
                         f"Duplicate tool name '{name}' at indices {seen[name]} and {idx}"
                     )
                 seen[name] = idx
-        
+
         # Check total size isn't excessive
         import json
+
         total_size = len(json.dumps([t.model_dump() for t in v]))
         if total_size > _MAX_TOTAL_REQUEST_SIZE_MB * 1024 * 1024:
-            raise ValueError(
-                f"Total tool schemas exceed {_MAX_TOTAL_REQUEST_SIZE_MB}MB limit"
-            )
-        
+            raise ValueError(f"Total tool schemas exceed {_MAX_TOTAL_REQUEST_SIZE_MB}MB limit")
+
         return v
 
     @field_validator("metadata")
@@ -350,7 +382,7 @@ class MessagesRequest(BaseModel):
     def validate_metadata(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
         if not v:
             return v
-        
+
         # Check for nested sensitive data patterns
         def check_keys(obj: Any, path: str = "") -> None:
             if isinstance(obj, dict):
@@ -364,7 +396,7 @@ class MessagesRequest(BaseModel):
             elif isinstance(obj, list):
                 for idx, item in enumerate(obj):
                     check_keys(item, f"{path}[{idx}]")
-        
+
         check_keys(v)
         return v
 
@@ -385,7 +417,7 @@ class MessagesRequest(BaseModel):
         last_role: str | None = None
         for idx, msg in enumerate(self.messages):
             current_role = msg.role
-            
+
             # System can appear anywhere
             if current_role == "system":
                 if last_role == "system":
@@ -393,7 +425,7 @@ class MessagesRequest(BaseModel):
                     pass
                 last_role = current_role
                 continue
-            
+
             # After first message, strict alternation
             if last_role and last_role != "system":
                 if current_role == last_role:
@@ -401,36 +433,39 @@ class MessagesRequest(BaseModel):
                     # But allow tool_result interleaving
                     if not (current_role == "user" and idx > 0):
                         pass  # Could raise ValueError here for strict mode
-        
+
         return self
 
 
 # ── Validation Error Formatting ───────────────────────────────────────────────
 
+
 def format_validation_error(error: Exception) -> dict[str, Any]:
     """Format a Pydantic validation error into Anthropic error format."""
     error_messages = []
-    
+
     if hasattr(error, "errors"):
         for err in error.errors():
-            loc = ".".join(str(l) for l in err.get("loc", []))
+            loc = ".".join(str(loc_part) for loc_part in err.get("loc", []))
             msg = err.get("msg", "validation error")
             error_messages.append(f"{loc}: {msg}" if loc else msg)
     else:
         error_messages.append(str(error))
-    
+
     return {
         "type": "error",
         "error": {
             "type": "invalid_request_error",
             "message": "; ".join(error_messages),
-        }
+        },
     }
 
 
-def validate_messages_request(data: dict[str, Any]) -> tuple[bool, dict[str, Any] | MessagesRequest]:
+def validate_messages_request(
+    data: dict[str, Any],
+) -> tuple[bool, dict[str, Any] | MessagesRequest]:
     """Validate an inbound request dict.
-    
+
     Returns:
         Tuple of (is_valid, validated_or_error_dict)
         If valid, returns MessagesRequest instance
@@ -445,6 +480,7 @@ def validate_messages_request(data: dict[str, Any]) -> tuple[bool, dict[str, Any
 
 # ── Utility Functions ─────────────────────────────────────────────────────────
 
+
 def is_server_tool(tool_type: str | None) -> bool:
     """Check if a tool type is an Anthropic server tool."""
     if not isinstance(tool_type, str):
@@ -457,17 +493,24 @@ def is_server_tool(tool_type: str | None) -> bool:
 
 def sanitize_for_logging(data: dict[str, Any]) -> dict[str, Any]:
     """Remove sensitive fields from data before logging.
-    
+
     This is a defense-in-depth measure. Primary sanitization should
     happen at the logging middleware level, but this provides an
     additional safety net.
     """
     sensitive_keys = {
-        "api_key", "apikey", "api-key", "authorization",
-        "password", "secret", "token", "credential",
-        "nvidia_api_key", "proxy_api_key",
+        "api_key",
+        "apikey",
+        "api-key",
+        "authorization",
+        "password",
+        "secret",
+        "token",
+        "credential",
+        "nvidia_api_key",
+        "proxy_api_key",
     }
-    
+
     def sanitize(obj: Any) -> Any:
         if isinstance(obj, dict):
             result = {}
@@ -483,5 +526,5 @@ def sanitize_for_logging(data: dict[str, Any]) -> dict[str, Any]:
             # Truncate very long strings (likely base64 data)
             return obj[:500] + "...[truncated]"
         return obj
-    
+
     return sanitize(data)

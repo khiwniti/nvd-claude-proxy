@@ -74,9 +74,9 @@ def approximate_tokens(body: dict) -> int:
     n = len(text)
     if n > _FAST_PATH_THRESHOLD_CHARS:
         # Tool-schema JSON has many single-char tokens (braces, quotes, colons)
-        # that NVIDIA's BPE rarely merges. 3.0 chars/token is a robust upper
+        # that NVIDIA's BPE rarely merges. 3.5 chars/token is a safe upper
         # bound vs cl100k at 3.8-4.0 on the same content.
-        return int(n / 3.0) + 3
+        return int(n / 3.5) + 3
 
     enc = _get_encoding()
     if enc is False:

@@ -57,25 +57,41 @@ _TAG_HALLUCINATION_RE = re.compile(r"(command-name>|command-arguments>)", re.IGN
 # Claude Code internal tools that are always allowed.
 # These are NOT in the user's tool schemas but are legitimate Claude Code
 # tools that the model may call. We allow them through without validation.
-_CLAUDE_CODE_INTERNAL_TOOLS = frozenset({
-    # Claude Code core commands
-    "Read", "Write", "Edit", "Bash", "NotebookEdit",
-    # Skill tool (for invoking agent skills)
-    "Skill", "skill",
-    # MCP tools
-    "mcp__tool",
-    # AskUserQuestion is sometimes generated
-    "AskUserQuestion",
-    # Claude Code internal commands that may appear in responses
-    "WebSearch", "WebFetch", "WebRead",
-    # Container/Browser tools
-    "computer", "bash", "browser",
-    # Legacy/alternative names
-    "AskUser", "Ask", "ask_user_question",
-    # Task/plan tools
-    "Task", "Plan", "plan",
-    # Any tool starting with common prefixes that might be Claude Code internals
-})
+_CLAUDE_CODE_INTERNAL_TOOLS = frozenset(
+    {
+        # Claude Code core commands
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "NotebookEdit",
+        # Skill tool (for invoking agent skills)
+        "Skill",
+        "skill",
+        # MCP tools
+        "mcp__tool",
+        # AskUserQuestion is sometimes generated
+        "AskUserQuestion",
+        # Claude Code internal commands that may appear in responses
+        "WebSearch",
+        "WebFetch",
+        "WebRead",
+        # Container/Browser tools
+        "computer",
+        "bash",
+        "browser",
+        # Legacy/alternative names
+        "AskUser",
+        "Ask",
+        "ask_user_question",
+        # Task/plan tools
+        "Task",
+        "Plan",
+        "plan",
+        # Any tool starting with common prefixes that might be Claude Code internals
+    }
+)
+
 
 def _is_claude_code_internal_tool(name: str) -> bool:
     """Check if a tool name is a known Claude Code internal tool."""
@@ -95,6 +111,7 @@ def _is_claude_code_internal_tool(name: str) -> bool:
     if name_lower.startswith("skill:"):
         return True
     return False
+
 
 BlockType = Literal["text", "thinking", "tool_use"]
 
@@ -121,13 +138,8 @@ class _ToolBuf:
     anth_index: int | None = None
     started: bool = False
     closed: bool = False
-    # args received before id+name arrived (flushed into streaming once started)
-    pre_start_buffer: str = ""
-    # Once the tool block is open, tracks whether we've seen the JSON start
-    # character so we can strip leading prose/fences before emitting.
-    _json_mode: bool = False
-    # Accumulates raw text before the first JSON start char is found.
-    _pre_json_acc: str = ""
+    # Accumulated raw text
+    args: str = ""
 
 
 def _strip_leading_prose(raw: str) -> str:
@@ -176,7 +188,9 @@ class StreamTranslator:
     # check is accurate from the very first tool call.
     _last_tool_names: list[str] = field(default_factory=list)
     _repetition_count: int = 0
+    _hallucination_count: int = 0
     _MAX_REPETITIONS: int = 3  # Force stop after seeing same tool pattern N times
+    _MAX_HALLUCINATIONS: int = 3  # Force stop after seeing N malformed tags
 
     # ── helpers ───────────────────────────────────────────────────────────
 
@@ -291,52 +305,99 @@ class StreamTranslator:
             },
         )
 
-    def _emit_tool_args_fragment(self, buf: _ToolBuf, fragment: str) -> Iterator[dict]:
-        """Progressively emit one tool-argument fragment as input_json_delta.
+    def _flush_tools(self) -> Iterator[dict]:
+        for o_idx in sorted(self._tools_by_openai_idx.keys()):
+            buf = self._tools_by_openai_idx[o_idx]
+            if not buf.openai_id or not buf.name:
+                continue
 
-        Leading prose and markdown fences are discarded before the first JSON
-        start character '{' or '[' is encountered. Once JSON mode is active,
-        all subsequent fragments bypass the scanner and are emitted directly.
-        """
-        if not fragment:
-            return
+            emit_name = self.tool_id_map.original_tool_name(buf.name or "")
 
-        # Enforcement: size guard on accumulated arguments.
-        if len(buf._pre_json_acc) + len(fragment) > buf._MAX_ARGS_BYTES:
-            buf._json_mode = True  # force-stop accumulation
-            buf._pre_json_acc = ""
-            return
+            if not self._is_declared_tool_name(buf.name):
+                if self._open_block_type != "text":
+                    yield from self._close_any_open()
+                    yield from self._open_text_block()
+                warning = f"\n[PROXY BLOCKED undeclared tool '{buf.name}' with args: {buf.args}]\n"
+                yield from self._emit(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": self._open_block_index,
+                        "delta": {"type": "text_delta", "text": warning},
+                    },
+                )
+                continue
 
-        if buf._json_mode:
+            # Strip prose
+            cleaned_args = _strip_leading_prose(buf.args)
+
+            # Validation
+            import json
+
+            try:
+                if cleaned_args:
+                    parsed_args = json.loads(cleaned_args)
+                else:
+                    parsed_args = {}
+
+                if self.tool_controller:
+                    failing = self.tool_controller.validate_all(
+                        [
+                            {
+                                "type": "tool_use",
+                                "id": self.tool_id_map.openai_to_anthropic(buf.openai_id),
+                                "name": buf.name,
+                                "input": parsed_args,
+                            }
+                        ]
+                    )
+                    if failing:
+                        raise ValueError(f"Schema validation failed for tool '{failing[0]}'")
+            except Exception as e:
+                if self._open_block_type != "text":
+                    yield from self._close_any_open()
+                    yield from self._open_text_block()
+                warning = f"\n[PROXY BLOCKED tool '{buf.name}' due to invalid args: {str(e)}]\n"
+                yield from self._emit(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": self._open_block_index,
+                        "delta": {"type": "text_delta", "text": warning},
+                    },
+                )
+                continue
+
+            yield from self._close_any_open()
+            buf.anthropic_id = self.tool_id_map.openai_to_anthropic(buf.openai_id)
+            buf.anth_index = self._next_index
+            self._next_index += 1
+            self._open_block_type = "tool_use"
+            self._open_block_index = buf.anth_index
+
             yield from self._emit(
-                "content_block_delta",
+                "content_block_start",
                 {
-                    "type": "content_block_delta",
+                    "type": "content_block_start",
                     "index": buf.anth_index,
-                    "delta": {"type": "input_json_delta", "partial_json": fragment},
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": buf.anthropic_id,
+                        "name": emit_name,
+                        "input": {},
+                    },
                 },
             )
-            return
-        # Not yet in JSON mode — accumulate and scan for the JSON start.
-        combined = buf._pre_json_acc + fragment
-        if combined.startswith("```"):
-            combined = _FENCE_RE.sub("", combined, count=1).rstrip("`").strip()
-        m = _JSON_START_RE.search(combined)
-        if m:
-            buf._json_mode = True
-            buf._pre_json_acc = ""
-            json_fragment = combined[m.start() :]
-            if json_fragment:
+            if cleaned_args:
                 yield from self._emit(
                     "content_block_delta",
                     {
                         "type": "content_block_delta",
                         "index": buf.anth_index,
-                        "delta": {"type": "input_json_delta", "partial_json": json_fragment},
+                        "delta": {"type": "input_json_delta", "partial_json": cleaned_args},
                     },
                 )
-        else:
-            buf._pre_json_acc = combined
+            yield from self._close_open_tool_use()
 
     def _is_declared_tool_name(self, streamed_name: str | None) -> bool:
         """Whether a streamed tool name exists in the request's declared tool list.
@@ -346,16 +407,13 @@ class StreamTranslator:
         """
         if not streamed_name:
             return False
-        # Allow Claude Code internal tools unconditionally
-        if _is_claude_code_internal_tool(streamed_name):
-            return True
         if not self.tool_controller or not self.tool_controller.has_registered_schemas():
             return True
-        
+
         # Check if the name matches directly or through fuzzy resolution.
         if self.tool_controller.resolve_tool_name(streamed_name) is not None:
             return True
-            
+
         original = self.tool_id_map.original_tool_name(streamed_name)
         return self.tool_controller.resolve_tool_name(original) is not None
 
@@ -427,7 +485,7 @@ class StreamTranslator:
                 parts = text.split("<think>", 1)
                 pre_think = parts[0]
                 post_think = parts[1]
-                
+
                 if pre_think:
                     if self._open_block_type != "text":
                         yield from self._close_any_open()
@@ -440,17 +498,17 @@ class StreamTranslator:
                             "delta": {"type": "text_delta", "text": pre_think},
                         },
                     )
-                
+
                 yield from self._close_any_open()
                 yield from self._open_thinking_block()
-                
+
                 if post_think:
                     # Check for closing tag in the same chunk
                     if "</think>" in post_think:
                         think_parts = post_think.split("</think>", 1)
                         inner_think = think_parts[0]
                         after_think = think_parts[1]
-                        
+
                         if inner_think:
                             yield from self._emit(
                                 "content_block_delta",
@@ -460,7 +518,7 @@ class StreamTranslator:
                                     "delta": {"type": "thinking_delta", "thinking": inner_think},
                                 },
                             )
-                        
+
                         yield from self._close_any_open()
                         if after_think:
                             yield from self._open_text_block()
@@ -488,7 +546,7 @@ class StreamTranslator:
                 parts = text.split("</think>", 1)
                 inner_think = parts[0]
                 post_think = parts[1]
-                
+
                 if inner_think:
                     yield from self._emit(
                         "content_block_delta",
@@ -498,7 +556,7 @@ class StreamTranslator:
                             "delta": {"type": "thinking_delta", "thinking": inner_think},
                         },
                     )
-                
+
                 yield from self._close_any_open()
                 if post_think:
                     yield from self._open_text_block()
@@ -513,26 +571,32 @@ class StreamTranslator:
                 return
 
             if _TAG_HALLUCINATION_RE.search(text):
-                yield from self._close_any_open()
-                yield from self._open_text_block()
-                yield from self._emit(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": self._open_block_index,
-                        "delta": {
-                            "type": "text_delta",
-                            "text": (
-                                "\n[PROXY: Detected malformed tag-based "
-                                "tool call — stopping generation]\n"
-                            ),
+                self._hallucination_count += 1
+                # Proactively strip the hallucinated tag to prevent client-side confusion
+                text = _TAG_HALLUCINATION_RE.sub("[TAG STRIPPED]", text)
+
+                if self._hallucination_count >= self._MAX_HALLUCINATIONS:
+                    if self._open_block_type != "text":
+                        yield from self._close_any_open()
+                        yield from self._open_text_block()
+                    yield from self._emit(
+                        "content_block_delta",
+                        {
+                            "type": "content_block_delta",
+                            "index": self._open_block_index,
+                            "delta": {
+                                "type": "text_delta",
+                                "text": (
+                                    f"\n{text}\n[PROXY: Detected repeated malformed "
+                                    "tag-based tool calls — stopping generation]\n"
+                                ),
+                            },
                         },
-                    },
-                )
-                yield from self._close_open_text_or_thinking()
-                self._stop_reason = "end_turn"
-                self._finished = True
-                return
+                    )
+                    yield from self._close_open_text_or_thinking()
+                    self._stop_reason = "end_turn"
+                    self._finished = True
+                    return
 
             if self._open_block_type != "text":
                 yield from self._close_any_open()
@@ -556,56 +620,13 @@ class StreamTranslator:
             if nm := fn.get("name"):
                 # Fuzzy resolve hallucinated tool names (e.g. Read -> read_file)
                 resolved = (
-                    self.tool_controller.resolve_tool_name(nm)
-                    if self.tool_controller
-                    else nm
+                    self.tool_controller.resolve_tool_name(nm) if self.tool_controller else nm
                 )
                 buf.name = resolved or nm
             new_args = fn.get("arguments") or ""
 
-            # DEFENSIVE: Block only truly undeclared tools. Do not block by
-            # hard-coded names (e.g. "Skill", "Read") because those may be
-            # legitimate tools in Claude Code sessions.
-            if buf.name and not self._is_declared_tool_name(buf.name):
-                if self._open_block_type != "text":
-                    yield from self._close_any_open()
-                    yield from self._open_text_block()
-                warning = (
-                    f"\n[PROXY BLOCKED undeclared tool '{buf.name}' "
-                    f"with args: {new_args or buf.pre_start_buffer}]\n"
-                )
-                yield from self._emit(
-                    "content_block_delta",
-                    {
-                        "type": "content_block_delta",
-                        "index": self._open_block_index,
-                        "delta": {"type": "text_delta", "text": warning},
-                    },
-                )
-                buf.started = True
-                buf.closed = True
-                continue
-
-            # Can we open this block yet? Need both id and name.
-            if not buf.started and buf.openai_id and buf.name:
-                # Close any currently-open block (including a different tool_use).
-                if (
-                    self._open_block_type == "tool_use"
-                    and self._open_block_index is not None
-                    and self._open_block_index != buf.anth_index
-                ):
-                    yield from self._close_open_tool_use()
-                else:
-                    yield from self._close_open_text_or_thinking()
-
-                buf.anthropic_id = self.tool_id_map.openai_to_anthropic(buf.openai_id)
-                buf.anth_index = self._next_index
-                self._next_index += 1
-                self._open_block_type = "tool_use"
-                self._open_block_index = buf.anth_index
-                buf.started = True
-
-                # REPETITION DETECTION: ONLY check when tool call FIRST starts.
+            # REPETITION DETECTION: Check when tool name FIRST arrives.
+            if buf.name and buf.args == "" and not new_args:
                 self._last_tool_names.append(buf.name)
                 if len(self._last_tool_names) > 10:
                     self._last_tool_names.pop(0)
@@ -637,41 +658,13 @@ class StreamTranslator:
                             self._finished = True
                             return
 
-                emit_name = self.tool_id_map.original_tool_name(buf.name or "")
-                yield from self._emit(
-                    "content_block_start",
-                    {
-                        "type": "content_block_start",
-                        "index": buf.anth_index,
-                        "content_block": {
-                            "type": "tool_use",
-                            "id": buf.anthropic_id,
-                            "name": emit_name,
-                            "input": {},
-                        },
-                    },
-                )
-                # Flush pre-start buffer + new fragment progressively.
-                initial = buf.pre_start_buffer + new_args
-                buf.pre_start_buffer = ""
-                yield from self._emit_tool_args_fragment(buf, initial)
-
-            elif buf.started and not buf.closed and new_args:
-                # If a different tool is currently open, switch to this one.
-                if self._open_block_type == "tool_use" and self._open_block_index != buf.anth_index:
-                    yield from self._close_open_tool_use()
-                    self._open_block_type = "tool_use"
-                    self._open_block_index = buf.anth_index
-                # Emit this fragment progressively.
-                yield from self._emit_tool_args_fragment(buf, new_args)
-
-            elif not buf.started and new_args:
-                # id/name haven't arrived yet — keep buffering.
-                buf.pre_start_buffer += new_args
+            buf.args += new_args
 
         # 4) Finish reason.
         if finish:
             yield from self._close_any_open()
+            if self._tools_by_openai_idx:
+                yield from self._flush_tools()
             self._stop_reason = _FINISH_TO_STOP.get(finish, "end_turn")
 
     def finalize(self) -> Iterator[dict]:

@@ -298,3 +298,93 @@ def test_undeclared_tool_is_blocked():
         and "PROXY BLOCKED undeclared tool 'GhostTool'" in e["data"]["delta"]["text"]
         for e in events
     )
+
+
+def test_interleaved_parallel_tool_calls():
+    chunks = [
+        # Tool A starts
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_a",
+                                "type": "function",
+                                "function": {"name": "f", "arguments": ""},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
+        # Tool B starts before Tool A finishes
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 1,
+                                "id": "call_b",
+                                "type": "function",
+                                "function": {"name": "g", "arguments": ""},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
+        # Tool A gets an arg fragment
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"x": 1}'}}]},
+                    "finish_reason": None,
+                }
+            ]
+        },
+        # Tool B gets an arg fragment
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 1, "function": {"arguments": '{"y": 2}'}}]},
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+        {"choices": [], "usage": {"prompt_tokens": 4, "completion_tokens": 4}},
+    ]
+    events = _collect(chunks)
+
+    # Assert proper contiguous ordering for Anthropic:
+    # message_start -> content_block_start(0) -> delta(0) -> stop(0)
+    # -> content_block_start(1) -> delta(1) -> stop(1) -> message_stop
+
+    # Filter to block events
+    blocks = [
+        e
+        for e in events
+        if e["event"] in ("content_block_start", "content_block_delta", "content_block_stop")
+    ]
+
+    # Assert contiguous delivery per block
+    # We expect exact order: start(0), delta(0), stop(0), start(1), delta(1), stop(1)
+    types_and_indices = [(b["event"], b["data"]["index"]) for b in blocks]
+    expected = [
+        ("content_block_start", 0),
+        ("content_block_delta", 0),
+        ("content_block_stop", 0),
+        ("content_block_start", 1),
+        ("content_block_delta", 1),
+        ("content_block_stop", 1),
+    ]
+    assert types_and_indices == expected

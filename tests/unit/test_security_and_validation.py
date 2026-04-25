@@ -11,24 +11,18 @@ from __future__ import annotations
 
 import pytest
 import time
-import asyncio
 
-from starlette.requests import Request
 from starlette.testclient import TestClient
-from unittest.mock import MagicMock, AsyncMock
 
 from nvd_claude_proxy.middleware.security import (
     is_url_blocked,
     extract_urls_from_body,
-    SecurityHeadersMiddleware,
-    SSRFProtectionMiddleware,
 )
 from nvd_claude_proxy.schemas.validators import (
     MessagesRequest,
     validate_messages_request,
     sanitize_for_logging,
     is_server_tool,
-    format_validation_error,
 )
 from nvd_claude_proxy.util.circuit_breaker import (
     CircuitBreaker,
@@ -41,15 +35,16 @@ from nvd_claude_proxy.util.circuit_breaker import (
 
 # ── SSRF Protection Tests ─────────────────────────────────────────────────────
 
+
 class TestSSRFProtection:
     def test_block_localhost_http(self):
         """Localhost URLs should be blocked."""
         blocked, reason = is_url_blocked("http://localhost/index.html")
         assert blocked, f"localhost should be blocked: {reason}"
-        
+
         blocked, reason = is_url_blocked("http://127.0.0.1/admin")
         assert blocked, f"127.0.0.1 should be blocked: {reason}"
-        
+
         blocked, reason = is_url_blocked("http://[::1]/secret")
         assert blocked, f"[::1] should be blocked: {reason}"
 
@@ -57,7 +52,7 @@ class TestSSRFProtection:
         """AWS/GCP/Azure metadata endpoints should be blocked."""
         blocked, reason = is_url_blocked("http://169.254.169.254/latest/meta-data/")
         assert blocked, f"AWS metadata should be blocked: {reason}"
-        
+
         blocked, reason = is_url_blocked("https://metadata.google.internal/computeMetadata/v1/")
         assert blocked, f"GCP metadata should be blocked: {reason}"
 
@@ -75,10 +70,10 @@ class TestSSRFProtection:
         """Private IP ranges should be blocked."""
         blocked, reason = is_url_blocked("http://10.0.0.1/admin")
         assert blocked, f"10.x.x.x should be blocked: {reason}"
-        
+
         blocked, reason = is_url_blocked("http://172.16.0.1/admin")
         assert blocked, f"172.16.x.x should be blocked: {reason}"
-        
+
         blocked, reason = is_url_blocked("http://192.168.1.1/admin")
         assert blocked, f"192.168.x.x should be blocked: {reason}"
 
@@ -86,7 +81,7 @@ class TestSSRFProtection:
         """Public URLs should be allowed."""
         allowed, _ = is_url_blocked("https://api.anthropic.com/v1/messages")
         assert not allowed, "Public URLs should be allowed"
-        
+
         allowed, _ = is_url_blocked("https://images.unsplash.com/photo.jpg")
         assert not allowed, "Image URLs should be allowed"
 
@@ -100,16 +95,17 @@ class TestExtractURLsFromBody:
     def test_extract_simple_url(self):
         """Should extract URL from image source."""
         body = {
-            "messages": [{
-                "role": "user",
-                "content": [{
-                    "type": "image",
-                    "source": {
-                        "type": "url",
-                        "url": "https://example.com/image.png"
-                    }
-                }]
-            }]
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "url", "url": "https://example.com/image.png"},
+                        }
+                    ],
+                }
+            ]
         }
         urls = extract_urls_from_body(body)
         assert ("https://example.com/image.png", "messages[0].content[0].source.url") in urls
@@ -117,14 +113,10 @@ class TestExtractURLsFromBody:
     def test_extract_nested_urls(self):
         """Should extract URLs from nested structures."""
         body = {
-            "system": [{
-                "type": "image",
-                "source": {"type": "url", "url": "https://example.com/logo.png"}
-            }],
-            "messages": [{
-                "role": "user",
-                "content": "Check this: https://example.com/doc.pdf"
-            }]
+            "system": [
+                {"type": "image", "source": {"type": "url", "url": "https://example.com/logo.png"}}
+            ],
+            "messages": [{"role": "user", "content": "Check this: https://example.com/doc.pdf"}],
         }
         urls = extract_urls_from_body(body)
         assert any("example.com" in url for url, _ in urls)
@@ -132,13 +124,14 @@ class TestExtractURLsFromBody:
 
 # ── Validation Tests ──────────────────────────────────────────────────────────
 
+
 class TestMessagesRequestValidation:
     def test_valid_minimal_request(self):
         """Minimal valid request should pass."""
         body = {
             "model": "claude-opus-4-7",
             "messages": [{"role": "user", "content": "Hello"}],
-            "max_tokens": 100
+            "max_tokens": 100,
         }
         is_valid, result = validate_messages_request(body)
         assert is_valid, f"Valid request should pass: {result}"
@@ -146,21 +139,14 @@ class TestMessagesRequestValidation:
 
     def test_reject_empty_model(self):
         """Empty model name should be rejected."""
-        body = {
-            "model": "",
-            "messages": [{"role": "user", "content": "Hello"}],
-            "max_tokens": 100
-        }
+        body = {"model": "", "messages": [{"role": "user", "content": "Hello"}], "max_tokens": 100}
         is_valid, result = validate_messages_request(body)
         assert not is_valid, "Empty model should be rejected"
         assert "model" in str(result).lower()
 
     def test_reject_missing_messages(self):
         """Missing messages should be rejected."""
-        body = {
-            "model": "claude-opus-4-7",
-            "max_tokens": 100
-        }
+        body = {"model": "claude-opus-4-7", "max_tokens": 100}
         is_valid, result = validate_messages_request(body)
         assert not is_valid, "Missing messages should be rejected"
 
@@ -169,7 +155,7 @@ class TestMessagesRequestValidation:
         body = {
             "model": "claude-opus-4-7",
             "messages": [{"role": "bot", "content": "Hello"}],
-            "max_tokens": 100
+            "max_tokens": 100,
         }
         is_valid, result = validate_messages_request(body)
         assert not is_valid, "Invalid role should be rejected"
@@ -180,7 +166,7 @@ class TestMessagesRequestValidation:
             "model": "claude-opus-4-7",
             "messages": [{"role": "user", "content": "Hello"}],
             "max_tokens": 100,
-            "temperature": 3.0
+            "temperature": 3.0,
         }
         is_valid, result = validate_messages_request(body)
         assert not is_valid, "Temperature > 2 should be rejected"
@@ -190,7 +176,7 @@ class TestMessagesRequestValidation:
         body = {
             "model": "claude-opus-4-7",
             "messages": [{"role": "user", "content": "Hello"}],
-            "max_tokens": 0
+            "max_tokens": 0,
         }
         is_valid, result = validate_messages_request(body)
         assert not is_valid, "max_tokens=0 should be rejected"
@@ -204,7 +190,7 @@ class TestMessagesRequestValidation:
             "tools": [
                 {"name": "read_file", "input_schema": {"type": "object"}},
                 {"name": "read_file", "input_schema": {"type": "object"}},  # Duplicate
-            ]
+            ],
         }
         is_valid, result = validate_messages_request(body)
         assert not is_valid, "Duplicate tool names should be rejected"
@@ -218,7 +204,7 @@ class TestMessagesRequestValidation:
             "max_tokens": 100,
             "tools": [
                 {"name": "invalid name", "input_schema": {"type": "object"}},  # Contains space
-            ]
+            ],
         }
         is_valid, result = validate_messages_request(body)
         assert not is_valid, "Invalid tool name should be rejected"
@@ -230,10 +216,22 @@ class TestMessagesRequestValidation:
             "messages": [{"role": "user", "content": "Hello"}],
             "max_tokens": 100,
             "tools": [
-                {"name": "read_file", "description": "Read a file", "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}}},
-                {"name": "WriteFile", "description": "Write a file", "input_schema": {"type": "object"}},
-                {"name": "my-tool_v2", "description": "Test tool", "input_schema": {"type": "object"}},
-            ]
+                {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+                },
+                {
+                    "name": "WriteFile",
+                    "description": "Write a file",
+                    "input_schema": {"type": "object"},
+                },
+                {
+                    "name": "my-tool_v2",
+                    "description": "Test tool",
+                    "input_schema": {"type": "object"},
+                },
+            ],
         }
         is_valid, result = validate_messages_request(body)
         assert is_valid, f"Valid tools should be accepted: {result}"
@@ -243,7 +241,7 @@ class TestMessagesRequestValidation:
         body = {
             "model": "claude-opus-4-7",
             "messages": [{"role": "assistant", "content": "Hello"}],
-            "max_tokens": 100
+            "max_tokens": 100,
         }
         is_valid, result = validate_messages_request(body)
         assert not is_valid, "First message cannot be from assistant"
@@ -269,11 +267,7 @@ class TestServerToolDetection:
 class TestSanitizeForLogging:
     def test_redacts_api_keys(self):
         """Should redact API keys."""
-        data = {
-            "api_key": "secret123",
-            "NVIDIA_API_KEY": "key456",
-            "request": {"data": "normal"}
-        }
+        data = {"api_key": "secret123", "NVIDIA_API_KEY": "key456", "request": {"data": "normal"}}
         sanitized = sanitize_for_logging(data)
         assert sanitized["api_key"] == "[REDACTED]"
         assert sanitized["NVIDIA_API_KEY"] == "[REDACTED]"
@@ -290,6 +284,7 @@ class TestSanitizeForLogging:
 
 # ── Circuit Breaker Tests ─────────────────────────────────────────────────────
 
+
 class TestCircuitBreaker:
     @pytest.fixture
     def breaker(self):
@@ -297,11 +292,8 @@ class TestCircuitBreaker:
         return CircuitBreaker(
             "test_service",
             CircuitBreakerConfig(
-                failure_threshold=3,
-                success_threshold=2,
-                timeout=1.0,
-                half_open_max_calls=2
-            )
+                failure_threshold=3, success_threshold=2, timeout=1.0, half_open_max_calls=2
+            ),
         )
 
     @pytest.mark.asyncio
@@ -312,9 +304,10 @@ class TestCircuitBreaker:
     @pytest.mark.asyncio
     async def test_success_increments_count(self, breaker):
         """Successful calls should not affect circuit."""
+
         async def success():
             return "ok"
-        
+
         await breaker.call(success)
         assert breaker.state == CircuitState.CLOSED
         assert breaker._success_calls == 1
@@ -322,13 +315,14 @@ class TestCircuitBreaker:
     @pytest.mark.asyncio
     async def test_failures_open_circuit(self, breaker):
         """Consecutive failures should open the circuit."""
+
         async def fail():
             raise ValueError("test error")
-        
+
         for _ in range(breaker.config.failure_threshold):
             with pytest.raises(ValueError):
                 await breaker.call(fail)
-        
+
         assert breaker.state == CircuitState.OPEN
 
     @pytest.mark.asyncio
@@ -336,14 +330,16 @@ class TestCircuitBreaker:
         """Open circuit should reject requests immediately when within timeout."""
         # Force open the circuit AND set a recent failure time
         await breaker.force_open()
-        breaker._last_failure_time = time.time()  # Set recent failure to prevent immediate half-open
-        
+        breaker._last_failure_time = (
+            time.time()
+        )  # Set recent failure to prevent immediate half-open
+
         async def dummy():
             return "test"
-        
+
         with pytest.raises(CircuitBreakerOpenError) as exc_info:
             await breaker.call(dummy)
-        
+
         assert exc_info.value.upstream == "test_service"
 
     @pytest.mark.asyncio
@@ -351,11 +347,11 @@ class TestCircuitBreaker:
         """After timeout, circuit should go to half-open."""
         await breaker.force_open()
         breaker._last_failure_time = time.time() - breaker.config.timeout - 1  # Past timeout
-        
+
         # Next call should transition to half-open
         async def success():
             return "ok"
-        
+
         # The call will succeed and transition to half-open
         result = await breaker.call(success)
         assert result == "ok"
@@ -366,14 +362,14 @@ class TestCircuitBreaker:
         # Open the circuit with past timeout
         await breaker.force_open()
         breaker._last_failure_time = time.time() - breaker.config.timeout - 1  # Past timeout
-        
+
         # Make success_threshold successful calls
         async def success():
             return "ok"
-        
+
         for _ in range(breaker.config.success_threshold):
             await breaker.call(success)
-        
+
         assert breaker.state == CircuitState.CLOSED
 
     @pytest.mark.asyncio
@@ -381,21 +377,23 @@ class TestCircuitBreaker:
         """Failure in half-open should reopen circuit."""
         await breaker.force_open()
         breaker._last_failure_time = time.time() - breaker.config.timeout - 1  # Past timeout
-        
+
         # First call succeeds (transitions to half-open)
         async def success():
             return "ok"
+
         await breaker.call(success)
         assert breaker.state == CircuitState.HALF_OPEN
-        
+
         # Second call fails (reopens)
         async def fail():
             raise ValueError("fail")
+
         try:
             await breaker.call(fail)
         except ValueError:
             pass
-        
+
         assert breaker.state == CircuitState.OPEN
 
     @pytest.mark.asyncio
@@ -420,12 +418,12 @@ class TestCircuitBreakerRegistry:
     async def test_get_or_create(self):
         """Should create new breaker or return existing."""
         registry = CircuitBreakerRegistry()
-        
+
         breaker1 = await registry.get_or_create("service1")
         breaker2 = await registry.get_or_create("service1")
-        
+
         assert breaker1 is breaker2, "Should return same instance"
-        
+
         breaker3 = await registry.get_or_create("service2")
         assert breaker3 is not breaker1, "Different services get different breakers"
 
@@ -433,10 +431,10 @@ class TestCircuitBreakerRegistry:
     async def test_get_all_metrics(self):
         """Should return metrics for all breakers."""
         registry = CircuitBreakerRegistry()
-        
+
         await registry.get_or_create("service1")
         await registry.get_or_create("service2")
-        
+
         all_metrics = await registry.get_all_metrics()
         assert "service1" in all_metrics
         assert "service2" in all_metrics
@@ -444,16 +442,17 @@ class TestCircuitBreakerRegistry:
 
 # ── Integration Tests ─────────────────────────────────────────────────────────
 
+
 class TestSecurityMiddlewareIntegration:
     """Test security middleware with the full app."""
-    
+
     def test_security_headers_present(self):
         """Security headers should be present in responses."""
         from nvd_claude_proxy.app import create_app
-        
+
         with TestClient(create_app()) as client:
             response = client.get("/healthz")
-            
+
             assert response.headers.get("X-Content-Type-Options") == "nosniff"
             assert response.headers.get("X-Frame-Options") == "DENY"
             assert response.headers.get("X-XSS-Protection") == "1; mode=block"
@@ -463,26 +462,27 @@ class TestSecurityMiddlewareIntegration:
     def test_ssrf_protection_on_messages(self):
         """SSRF protection should block dangerous URLs."""
         from nvd_claude_proxy.app import create_app
-        
+
         with TestClient(create_app()) as client:
             response = client.post(
                 "/v1/messages",
                 json={
                     "model": "claude-opus-4-7",
-                    "messages": [{
-                        "role": "user",
-                        "content": [{
-                            "type": "image",
-                            "source": {
-                                "type": "url",
-                                "url": "file:///etc/passwd"
-                            }
-                        }]
-                    }],
-                    "max_tokens": 100
-                }
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {"type": "url", "url": "file:///etc/passwd"},
+                                }
+                            ],
+                        }
+                    ],
+                    "max_tokens": 100,
+                },
             )
-            
+
             # Should be rejected with 400
             assert response.status_code == 400
             data = response.json()

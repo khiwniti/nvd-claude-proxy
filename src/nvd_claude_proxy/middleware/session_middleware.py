@@ -12,6 +12,7 @@ from ..db.models import Session
 
 _log = structlog.get_logger("nvd_claude_proxy.session_middleware")
 
+
 class SessionMiddleware(BaseHTTPMiddleware):
     """
     Middleware that identifies the user session via the x-api-key header.
@@ -38,7 +39,7 @@ class SessionMiddleware(BaseHTTPMiddleware):
                     db_session.add(session_obj)
                     await db_session.commit()
                     await db_session.refresh(session_obj)
-                
+
                 # Attach to request.state for downstream use
                 request.state.session = session_obj
         else:

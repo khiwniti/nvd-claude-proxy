@@ -11,17 +11,18 @@ The spec is available at GET /v1/openapi.json
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Request
 from fastapi.responses import ORJSONResponse
 
-from ..schemas.anthropic import MessagesRequest, MessagesResponse
 from ..util.anthropic_headers import standard_response_headers, new_request_id
 
 router = APIRouter()
 
 # ── Anthropic API OpenAPI Schema ──────────────────────────────────────────────
 
-ANTHROPIC_OPENAPI_SCHEMA = {
+ANTHROPIC_OPENAPI_SCHEMA: dict[str, Any] = {
     "openapi": "3.0.3",
     "info": {
         "title": "Anthropic Messages API",
@@ -90,9 +91,7 @@ ANTHROPIC_OPENAPI_SCHEMA = {
                                     "summary": "Simple text request",
                                     "value": {
                                         "model": "claude-opus-4-7",
-                                        "messages": [
-                                            {"role": "user", "content": "Hello, Claude"}
-                                        ],
+                                        "messages": [{"role": "user", "content": "Hello, Claude"}],
                                         "max_tokens": 1024,
                                     },
                                 },
@@ -126,9 +125,7 @@ ANTHROPIC_OPENAPI_SCHEMA = {
                                     "summary": "Streaming response",
                                     "value": {
                                         "model": "claude-opus-4-7",
-                                        "messages": [
-                                            {"role": "user", "content": "Write a story"}
-                                        ],
+                                        "messages": [{"role": "user", "content": "Write a story"}],
                                         "max_tokens": 2048,
                                         "stream": True,
                                     },
@@ -583,7 +580,7 @@ ANTHROPIC_OPENAPI_SCHEMA = {
 @router.get("/v1/openapi.json", include_in_schema=False)
 async def get_openapi_spec(request: Request) -> ORJSONResponse:
     """Return the Anthropic-shaped OpenAPI specification.
-    
+
     This endpoint provides an OpenAPI 3.0 spec matching Anthropic's
     Messages API documentation format.
     """
@@ -597,11 +594,11 @@ async def get_openapi_spec(request: Request) -> ORJSONResponse:
 @router.get("/v1/messages/schema", include_in_schema=False)
 async def get_messages_schema(request: Request) -> ORJSONResponse:
     """Return JSON Schema for the Messages API request/response.
-    
+
     Useful for SDK code generation and validation.
     """
     request_id = new_request_id()
-    
+
     schema = {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "MessageRequest": ANTHROPIC_OPENAPI_SCHEMA["components"]["schemas"]["MessageRequest"],
@@ -610,7 +607,7 @@ async def get_messages_schema(request: Request) -> ORJSONResponse:
         "Tool": ANTHROPIC_OPENAPI_SCHEMA["components"]["schemas"]["Tool"],
         "ErrorResponse": ANTHROPIC_OPENAPI_SCHEMA["components"]["schemas"]["ErrorResponse"],
     }
-    
+
     return ORJSONResponse(
         schema,
         headers=standard_response_headers(request_id),

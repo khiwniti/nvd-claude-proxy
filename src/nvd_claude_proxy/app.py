@@ -29,6 +29,7 @@ try:
         RequestTimingMiddleware,
         AuditLoggerMiddleware,
     )
+
     _HAS_SECURITY_MIDDLEWARE = True
 except ImportError:
     _HAS_SECURITY_MIDDLEWARE = False
@@ -107,6 +108,15 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Initialize the database
+        from .db.database import init_db
+
+        try:
+            await init_db()
+            _log.info("database.initialized")
+        except Exception as exc:
+            _log.error("database.init_failed", error=str(exc))
+
         # Create a shared NvidiaClient (and its httpx connection pool) once.
         app.state.nvidia_client = NvidiaClient(app.state.settings)
         _log.info("nvidia_client.created")
@@ -125,7 +135,7 @@ def create_app() -> FastAPI:
     app.state.pubsub = PubSub()
     _install_sighup_handler(app)
     # Middleware is applied in reverse registration order (last added = outermost).
-    
+
     @app.websocket("/ws/monitor")
     async def websocket_monitor(websocket: WebSocket) -> None:
         """Endpoint for the real-time monitoring dashboard."""
@@ -145,11 +155,12 @@ def create_app() -> FastAPI:
     if settings.max_request_body_mb > 0:
         max_bytes = int(settings.max_request_body_mb * 1024 * 1024)
         app.add_middleware(BodyLimitMiddleware, max_bytes=max_bytes)
-    
+
     # Session isolation middleware
     from .middleware.session_middleware import SessionMiddleware
+
     app.add_middleware(SessionMiddleware)
-    
+
     # Security middleware (production hardening)
     if _HAS_SECURITY_MIDDLEWARE:
         # Outermost middleware runs first
@@ -161,7 +172,7 @@ def create_app() -> FastAPI:
         _log.info("security.middleware.enabled")
     else:
         _log.warning("security.middleware.disabled")
-    
+
     app.include_router(messages.router)
     app.include_router(dashboard.router)
     app.include_router(count_tokens.router)
@@ -173,6 +184,7 @@ def create_app() -> FastAPI:
 
     # Mount static files for dashboard frontend
     from pathlib import Path
+
     static_dir = Path(__file__).parent / "static"
     app.mount("/dashboard", StaticFiles(directory=str(static_dir), html=True), name="static")
 

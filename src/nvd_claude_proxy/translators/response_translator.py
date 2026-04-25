@@ -88,7 +88,6 @@ def _extract_tool_args(raw: str) -> dict:
     return {"_raw_arguments": raw}
 
 
-
 _FINISH_TO_STOP: dict[str | None, str] = {
     "stop": "end_turn",
     "length": "max_tokens",
@@ -99,7 +98,9 @@ _FINISH_TO_STOP: dict[str | None, str] = {
 }
 
 
-def _extract_thinking(content: str | None, reasoning: str | None, thinking_obj: dict | None = None) -> tuple[str | None, str, str | None]:
+def _extract_thinking(
+    content: str | None, reasoning: str | None, thinking_obj: dict | None = None
+) -> tuple[str | None, str, str | None]:
     """Return `(thinking_text, remaining_content, signature)`.
 
     Accepts both `reasoning_content` and inline `<think>…</think>` since different
@@ -118,8 +119,8 @@ def _extract_thinking(content: str | None, reasoning: str | None, thinking_obj: 
 
 
 def translate_response(
-    openai_resp: dict, 
-    anthropic_model: str, 
+    openai_resp: dict,
+    anthropic_model: str,
     tool_id_map: ToolIdMap,
     tool_controller: Any | None = None,
     transformer_chain: TransformerChain | None = None,
@@ -156,28 +157,42 @@ def translate_response(
         sanitized_name = fn.get("name", "")
         # Fuzzy resolve hallucinated tool names
         resolved = (
-            tool_controller.resolve_tool_name(sanitized_name)
-            if tool_controller
-            else sanitized_name
+            tool_controller.resolve_tool_name(sanitized_name) if tool_controller else sanitized_name
         )
         name_to_use = resolved or sanitized_name
         original_name = tool_id_map.original_tool_name(name_to_use)
-        
+
         # Resolve hallucinated argument keys
         final_input = (
             tool_controller.resolve_tool_arguments(original_name, tool_input)
             if tool_controller
             else tool_input
         )
-        
-        content_blocks.append(
-            {
-                "type": "tool_use",
-                "id": anth_id,
-                "name": original_name,
-                "input": final_input,
-            }
-        )
+
+        is_valid = True
+        if tool_controller:
+            failing = tool_controller.validate_all(
+                [{"type": "tool_use", "name": name_to_use, "input": final_input}]
+            )
+            if failing:
+                is_valid = False
+
+        if is_valid:
+            content_blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": anth_id,
+                    "name": original_name,
+                    "input": final_input,
+                }
+            )
+        else:
+            content_blocks.append(
+                {
+                    "type": "text",
+                    "text": f"\n[PROXY BLOCKED tool '{original_name}' due to invalid args]\n",
+                }
+            )
 
     if not content_blocks:
         # Anthropic requires at least one block; emit an empty text block.

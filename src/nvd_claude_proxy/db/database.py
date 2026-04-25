@@ -13,9 +13,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./nvd_claude_proxy
 engine = create_async_engine(DATABASE_URL)
 
 # Create a session factory.
-async_session_factory = async_sessionmaker(
-    engine, expire_on_commit=False, class_=AsyncSession
-)
+async_session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

@@ -10,6 +10,7 @@ from json_repair import repair_json
 
 _log = structlog.get_logger("nvd_claude_proxy.transformers")
 
+
 @runtime_checkable
 class Transformer(Protocol):
     on_fix: Callable[[str, Any], None] | None = None
@@ -29,9 +30,7 @@ class Transformer(Protocol):
 
 class TransformerChain:
     def __init__(
-        self, 
-        transformers: list[Transformer], 
-        on_fix: Callable[[str, Any], None] | None = None
+        self, transformers: list[Transformer], on_fix: Callable[[str, Any], None] | None = None
     ) -> None:
         self.transformers = transformers
         self.on_fix = on_fix
@@ -60,9 +59,7 @@ class TransformerChain:
 
     @classmethod
     def from_dict(
-        cls, 
-        data: list[dict[str, Any]], 
-        on_fix: Callable[[str, Any], None] | None = None
+        cls, data: list[dict[str, Any]], on_fix: Callable[[str, Any], None] | None = None
     ) -> TransformerChain:
         transformers = []
         for item in data:
@@ -160,27 +157,29 @@ class WebSearchTransformer:
                 content = msg.get("content") or []
                 if isinstance(content, str):
                     content = [{"type": "text", "text": content}]
-                
+
                 for ann in annotations:
                     if ann.get("type") == "web_search":
                         # Map to Anthropic web_search_tool_result
-                        content.append({
-                            "type": "web_search_tool_result",
-                            "tool_use_id": f"srvtoolu_{secrets.token_urlsafe(12)}",
-                            "content": [
-                                {
-                                    "type": "web_search_result",
-                                    "title": ann.get("title", ""),
-                                    "url": ann.get("url", ""),
-                                }
-                            ],
-                        })
+                        content.append(
+                            {
+                                "type": "web_search_tool_result",
+                                "tool_use_id": f"srvtoolu_{secrets.token_urlsafe(12)}",
+                                "content": [
+                                    {
+                                        "type": "web_search_result",
+                                        "title": ann.get("title", ""),
+                                        "url": ann.get("url", ""),
+                                    }
+                                ],
+                            }
+                        )
                 msg["content"] = content
         return response
 
     def transform_stream_chunk(self, chunk: dict[str, Any]) -> dict[str, Any] | None:
         # Note: Streaming search results is difficult because one OpenAI chunk
-        # with multiple annotations would need to explode into multiple 
+        # with multiple annotations would need to explode into multiple
         # Anthropic events. For now, we pass through.
         return chunk
 
@@ -278,7 +277,7 @@ class ExitToolTransformer:
                 msg["content"] = (msg.get("content") or "") + "\n\n" + self._SYSTEM_REMINDER
                 system_found = True
                 break
-        
+
         if not system_found:
             modified_messages.insert(0, {"role": "system", "content": self._SYSTEM_REMINDER})
 
@@ -338,10 +337,12 @@ class ExitToolTransformer:
                         parsed = json.loads(self._exit_tool_response)
                         text = parsed.get("response", "")
                         converted = dict(chunk)
-                        converted["choices"] = [{
-                            **choice,
-                            "delta": {"role": "assistant", "content": text},
-                        }]
+                        converted["choices"] = [
+                            {
+                                **choice,
+                                "delta": {"role": "assistant", "content": text},
+                            }
+                        ]
                         return converted
                     except (json.JSONDecodeError, ValueError):
                         pass

@@ -56,7 +56,7 @@ class ToolInvocationController:
                     self._validators[name] = Draft7Validator(schema)
                 except Exception:  # noqa: BLE001
                     pass  # Malformed schema — skip; model will return what it returns.
-        
+
         self.fuzzy_mapper = FuzzyToolMapper(set(self._tool_schemas.keys()))
 
     # ── validation ────────────────────────────────────────────────────────
@@ -107,12 +107,12 @@ class ToolInvocationController:
 
     def resolve_tool_name(self, name: str) -> str | None:
         """Resolve a potentially hallucinated tool name to a valid one.
-        
+
         Returns the valid name if a match is found, else None.
         """
         if name in self._tool_schemas:
             return name
-        
+
         resolved = self.fuzzy_mapper.map_name(name)
         if resolved and resolved != name:
             logger.info("tool.fuzzy_resolved", original=name, resolved=resolved)

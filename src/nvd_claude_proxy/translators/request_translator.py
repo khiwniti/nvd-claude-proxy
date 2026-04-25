@@ -10,8 +10,6 @@ import structlog
 from ..config.models import CapabilityManifest
 from ..util.pdf_extractor import document_block_to_text
 from ..util.tokens import approximate_tokens
-
-_log = structlog.get_logger("nvd_claude_proxy.translator")
 from .thinking_translator import (
     inject_reasoning_toggle,
     strip_prior_thinking_from_history,
@@ -24,8 +22,10 @@ from .tool_translator import (
 from .vision_translator import anthropic_image_to_openai
 from .transformers import TransformerChain
 
+_log = structlog.get_logger("nvd_claude_proxy.translator")
+
 # Leave this many tokens of headroom between estimated input+output and the
-# model's hard context window. 8k is enough to absorb cl100k vs Nemotron 
+# model's hard context window. 8k is enough to absorb cl100k vs Nemotron
 # tokenization drift while maximizing usable space in 128k windows.
 _CONTEXT_HEADROOM = 8192
 # Minimum we will ever allow for output even under heavy clamping so the
@@ -55,47 +55,73 @@ def _truncate_messages_to_fit(
     tools: list[dict],
     max_context: int,
     min_output: int,
-) -> tuple[list[dict], int]:
-    """Drop oldest non-system turns until the input estimate fits the window.
+) -> tuple[list[dict], list[dict], int]:
+    """Drop oldest non-system turns and then simplify tool schemas until the
+    input estimate fits the window.
 
-    Strategy: skip over any leading system messages, then remove one message at
-    a time from the oldest end.  Stops as soon as the estimate is below the
-    threshold or only one non-system message remains (can't truncate further).
-
-    Returns (truncated_messages, new_est_input).
+    Returns (truncated_messages, simplified_tools, new_est_input).
     """
     threshold = max_context - min_output
 
+    # 1. First, truncate message history.
     # Index of the first non-system message.
     first_non_system = 0
     while first_non_system < len(messages) and messages[first_non_system].get("role") == "system":
         first_non_system += 1
 
     msgs = list(messages)
+    current_tools = list(tools)
+
     while len(msgs) > first_non_system + 1:
-        est = approximate_tokens({"messages": msgs, "tools": tools})
+        est = approximate_tokens({"messages": msgs, "tools": current_tools})
         if est < threshold:
-            return msgs, est
+            return msgs, current_tools, est
         # Drop the oldest non-system message.
-        msgs = msgs[:first_non_system] + msgs[first_non_system + 1:]
+        msgs = msgs[:first_non_system] + msgs[first_non_system + 1 :]
 
-    return msgs, approximate_tokens({"messages": msgs, "tools": tools})
+    # 2. If still over, aggressively simplify tool schemas.
+    # We strip all descriptions first as they are often the largest text blocks.
+    if approximate_tokens({"messages": msgs, "tools": current_tools}) >= threshold:
+        simplified = []
+        for t in current_tools:
+            t_copy = dict(t)
+            t_copy["description"] = (t_copy.get("description") or "")[:40] + "..."
+            simplified.append(t_copy)
+        current_tools = simplified
+
+    # 3. If STILL over, we have to start dropping tools from the end.
+    # (Claude Code /init has ~190 tools; dropping the last few is usually safe).
+    while (
+        len(current_tools) > 5
+        and approximate_tokens({"messages": msgs, "tools": current_tools}) >= threshold
+    ):
+        current_tools.pop()
+
+    return msgs, current_tools, approximate_tokens({"messages": msgs, "tools": current_tools})
 
 
-_TOOL_DISCIPLINE_ADDENDUM = """\n\n---\nTool use discipline (IMPORTANT):\n- Only call a tool when you are certain it is the correct tool for the task.\n- ALWAYS use the native tool-calling API. NEVER output tags like `command-name>` or `command-arguments>` in your response.\n- When calling the `Skill` tool, use the EXACT skill name shown in the tool description (e.g. \"/vercel:env\", not \"vercel\"). Do not guess skill names.\n- Provide ALL required parameters for every tool call. Check the tool schema before calling.\n- If you are unsure which tool to use, ask the user for clarification instead of guessing.\n- Do not call design or UI tools (e.g. `pencil`) for non-design tasks such as file migration or code editing.\n---"""
+_TOOL_DISCIPLINE_ADDENDUM = """\n\n[IMPORTANT: ALWAYS use the native tool-calling API. NEVER output tags like `command-name>` or `command-arguments>`. If you must call a tool, use the tool_calls field only.]"""
 
 
 def _inject_tool_discipline(messages: list[dict]) -> None:
-    """Append tool-discipline guidance to the system message in-place.
+    """Inject tool-discipline guidance to ensure the model uses the native API.
 
-    When the tool catalog is large (>50 tools), Nemotron tends to hallucinate
-    tool names and call meta-tools with wrong parameters.  A short addendum in
-    the system turn is the most token-efficient nudge.
+    For long conversations or high tool counts, we append this to the LAST user
+    message to ensure it's in the immediate context window.
     """
-    if messages and messages[0].get("role") == "system":
-        messages[0]["content"] = (messages[0]["content"] or "") + _TOOL_DISCIPLINE_ADDENDUM
-    else:
-        messages.insert(0, {"role": "system", "content": _TOOL_DISCIPLINE_ADDENDUM.strip()})
+    if not messages:
+        return
+
+    # Find the last user message
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user":
+            content = messages[i].get("content")
+            if isinstance(content, str):
+                messages[i]["content"] = content + _TOOL_DISCIPLINE_ADDENDUM
+            elif isinstance(content, list):
+                # Append a new text block to the content list
+                content.append({"type": "text", "text": _TOOL_DISCIPLINE_ADDENDUM.strip()})
+            break
 
 
 def _flatten_system(system: Any, spec: CapabilityManifest) -> str | list[dict] | None:
@@ -246,6 +272,18 @@ def _anthropic_message_to_openai(
     return out
 
 
+_TOOL_PROTOCOL_SYSTEM_PROMPT = """
+
+# Tool Use Protocol (STRICT)
+You are an expert at tool use. You MUST ALWAYS follow these rules:
+1. ALWAYS use the native `tool_calls` API for all tool interactions.
+2. NEVER output tags like `<command-name>`, `<command-arguments>`, or similar.
+3. If you need to call a tool, generate the `tool_calls` field in your response. 
+4. DO NOT explain your tool call or output any text before the tool call if possible.
+5. If you hallucinate a tag, you will be stopped. Use ONLY JSON for tool calls.
+"""
+
+
 def translate_request(
     anthropic_body: dict,
     spec: CapabilityManifest,
@@ -254,6 +292,16 @@ def translate_request(
 ) -> dict:
     openai_messages: list[dict] = []
     system_content = _flatten_system(anthropic_body.get("system"), spec)
+
+    # Prepend tool protocol to system prompt for models with many tools
+    if (tools := anthropic_body.get("tools")) and len(tools) > 30:
+        if system_content is None:
+            system_content = _TOOL_PROTOCOL_SYSTEM_PROMPT.strip()
+        elif isinstance(system_content, str):
+            system_content = _TOOL_PROTOCOL_SYSTEM_PROMPT.strip() + "\n\n" + system_content
+        elif isinstance(system_content, list):
+            system_content.insert(0, {"type": "text", "text": _TOOL_PROTOCOL_SYSTEM_PROMPT.strip()})
+
     if system_content:
         openai_messages.append({"role": "system", "content": system_content})
     for m in anthropic_body.get("messages") or []:
@@ -270,7 +318,20 @@ def translate_request(
     thinking = anthropic_body.get("thinking")
     openai_messages = inject_reasoning_toggle(openai_messages, spec, thinking)
 
-    requested_max = int(anthropic_body.get("max_tokens") or spec.max_output)
+    # ── Token Limit Clamping ──────────────────────────────────────────
+    # Claude Code has a hard cap (usually 16k or 32k). If the model's max_output
+    # is huge (like 128k), a looping model can easily hit it. We clamp the
+    # automatic maximum to a safe threshold (16k) unless the user explicitly
+    # requested more.
+    _SAFE_OUTPUT_CAP = 16384
+
+    if "max_tokens" not in anthropic_body:
+        # User didn't specify, so we pick the best of (model_max, safe_cap)
+        requested_max = min(spec.max_output, _SAFE_OUTPUT_CAP)
+    else:
+        # User specified, we honor it up to the model's hard limit
+        requested_max = int(anthropic_body["max_tokens"])
+        requested_max = min(requested_max, spec.max_output)
 
     # Build the tool payload up front so we can include it in the input-size
     # estimate — Claude Code's `/init` sends ~190 tool schemas that dominate
@@ -304,10 +365,10 @@ def translate_request(
     # messages (system+user+assistant+tool) and tool schemas.
     est_input = approximate_tokens({"messages": openai_messages, "tools": mapped_tools})
     # Pre-flight guard: if the input alone fills the window, try to salvage the
-    # request by dropping oldest turns before hard-failing.
+    # request by dropping oldest turns AND simplifying tool schemas before hard-failing.
     if est_input >= spec.max_context - _MIN_OUTPUT:
         original_est = est_input
-        openai_messages, est_input = _truncate_messages_to_fit(
+        openai_messages, mapped_tools, est_input = _truncate_messages_to_fit(
             openai_messages, mapped_tools, spec.max_context, _MIN_OUTPUT
         )
         if est_input >= spec.max_context - _MIN_OUTPUT:

@@ -30,6 +30,7 @@ from ..util.metrics import inc_requests, inc_tokens, observe_duration
 from ..util.tokens import approximate_tokens
 from ..util.router import get_use_model
 from ..util.sse import encode_sse
+from ..util.cache_accounting import estimate_cache_tokens, has_cache_control_markers
 from ..util.circuit_breaker import get_circuit_breaker_registry, CircuitBreakerOpenError
 from ..config.models import CapabilityManifest
 from ..services.session_service import SessionService
@@ -37,6 +38,7 @@ from ..services.session_service import SessionService
 # Import request validators for production hardening
 try:
     from ..schemas.validators import validate_messages_request
+
     _HAS_VALIDATORS = True
 except ImportError:
     _HAS_VALIDATORS = False
@@ -50,30 +52,25 @@ _log = structlog.get_logger("nvd_claude_proxy.messages")
 _PING_INTERVAL_SECONDS = 15.0
 
 
-def _build_transformer_chain(
-    spec: CapabilityManifest, 
-    on_fix: Callable[[str, Any], None] | None = None
-) -> TransformerChain:
+def _build_transformer_chain(spec: CapabilityManifest, on_fix: Callable[[str, Any], None] | None = None) -> TransformerChain:
     """Instantiate a TransformerChain based on model capabilities."""
-    transformers = []
+    from ..translators.transformers import Transformer
+    transformers: list[Transformer] = []
     # Always clean control chars
     transformers.append(CharFixerTransformer(on_fix=on_fix))
-    
+
     if spec.supports_tools:
         transformers.append(JSONRepairTransformer(on_fix=on_fix))
         if spec.tools.exit_tool_enabled:
             transformers.append(ExitToolTransformer())
-            
+
     if spec.supports_reasoning:
         transformers.append(ReasoningTransformer())
-        
+
     # Always include web search for future-proofing
     transformers.append(WebSearchTransformer())
-    
+
     return TransformerChain(transformers, on_fix=on_fix)
-
-
-from ..util.cache_accounting import estimate_cache_tokens, has_cache_control_markers
 
 
 def _check_proxy_key(request: Request) -> None:
@@ -81,7 +78,7 @@ def _check_proxy_key(request: Request) -> None:
     if not s.proxy_api_key:
         return
 
-    # Trusted sessions must be authenticated. Freshly created sessions are 
+    # Trusted sessions must be authenticated. Freshly created sessions are
     # not authenticated until the key is checked once.
     session_obj = getattr(request.state, "session", None)
     if session_obj and getattr(session_obj, "authenticated", False):
@@ -104,7 +101,7 @@ def _check_proxy_key(request: Request) -> None:
                 },
             },
         )
-    
+
     # Mark session as authenticated for this process lifetime
     if session_obj:
         session_obj.authenticated = True
@@ -160,18 +157,22 @@ async def messages(request: Request):
     if _HAS_VALIDATORS:
         is_valid, result = validate_messages_request(body)
         if not is_valid:
+            error_dict = result if isinstance(result, dict) else {}
             rid = new_request_id()
             _log.warning(
                 "messages.validation_failed",
                 request_id=rid,
-                error=result.get("error", {}).get("message", ""),
+                error=error_dict.get("error", {}).get("message", ""),
             )
             return ORJSONResponse(
-                result,
+                error_dict,
                 status_code=400,
                 headers=standard_response_headers(rid),
             )
-        # Validation passed - body is already validated, continue with original dict
+        # Validation passed - use validated model for downstream processing
+        from ..schemas.validators import MessagesRequest
+        if isinstance(result, MessagesRequest):
+            body = result.model_dump(exclude_none=True)
         _log.debug("messages.validated")
 
     registry = request.app.state.model_registry
@@ -195,21 +196,21 @@ async def messages(request: Request):
     # Estimate tokens of the Anthropic request body to inform routing.
     rough_input_tokens = approximate_tokens(body)
     requested_model = get_use_model(body, rough_input_tokens, registry)
-    
+
     spec_chain = registry.resolve_chain(requested_model)
     spec = spec_chain[0]
-    
+
     # Load isolated state from session if available
     session_obj = getattr(request.state, "session", None)
     tool_id_map = SessionService.get_isolated_tool_id_map(session_obj)
     transformer_chain = SessionService.get_isolated_transformer_chain(
         session_obj, spec, _build_transformer_chain, on_fix=on_fix
     )
-    
+
     # Pass tool schemas so the controller can perform deterministic arg validation.
     tool_schemas = _build_tool_schemas(body)
     tool_controller = ToolInvocationController(spec, tool_id_map, tool_schemas=tool_schemas)
-    
+
     try:
         payload = translate_request(body, spec, tool_id_map, transformer_chain=transformer_chain)
     except ContextOverflowError as exc:
@@ -261,7 +262,7 @@ async def messages(request: Request):
         t0 = time.monotonic()
         resp = None
         circuit_breaker = await get_circuit_breaker_registry().get_or_create("nvidia_api")
-        
+
         for attempt_idx, try_spec in enumerate(spec_chain):
             if attempt_idx > 0:
                 tool_id_map = ToolIdMap()
@@ -281,7 +282,9 @@ async def messages(request: Request):
                     "messages.circuit_breaker_open",
                     request_id=rid,
                     upstream="nvidia_api",
-                    retry_after=circuit_breaker.config.timeout if hasattr(circuit_breaker, 'config') else 30,
+                    retry_after=circuit_breaker.config.timeout
+                    if hasattr(circuit_breaker, "config")
+                    else 30,
                 )
                 err_headers = standard_response_headers(rid)
                 return ORJSONResponse(
@@ -323,13 +326,13 @@ async def messages(request: Request):
             if status == 429 and (ra := resp.headers.get("retry-after")):
                 err_headers["retry-after"] = ra
             return ORJSONResponse(anth, status_code=status, headers=err_headers)
-        
+
         out = translate_response(
-            resp.json(), 
-            requested_model, 
-            tool_id_map, 
+            resp.json(),
+            requested_model,
+            tool_id_map,
             tool_controller=tool_controller,
-            transformer_chain=transformer_chain
+            transformer_chain=transformer_chain,
         )
         # Wire cache accounting for cost tracking
         if has_cache_control_markers(body):
@@ -357,7 +360,7 @@ async def messages(request: Request):
                 session_id=session_obj.id,
                 tool_id_map=tool_id_map,
                 transformer_chain=transformer_chain,
-                tokens_inc=in_tok + out_tok
+                tokens_inc=in_tok + out_tok,
             )
 
         _log.info(
@@ -386,7 +389,6 @@ async def messages(request: Request):
         active_tool_id_map = tool_id_map
         active_payload = payload
         active_tool_controller = tool_controller
-        circuit_breaker = await get_circuit_breaker_registry().get_or_create("nvidia_api")
 
         try:
             for attempt_idx, try_spec in enumerate(spec_chain):
@@ -474,18 +476,22 @@ async def messages(request: Request):
                     if not sentinel_seen:
                         if isinstance(first_item, dict):
                             if hasattr(request.app.state, "pubsub"):
-                                await request.app.state.pubsub.broadcast({
-                                    "type": "openai_chunk",
-                                    "payload": first_item,
-                                    "request_id": request_id
-                                })
+                                await request.app.state.pubsub.broadcast(
+                                    {
+                                        "type": "openai_chunk",
+                                        "payload": first_item,
+                                        "request_id": request_id,
+                                    }
+                                )
                             for ev in st.feed(first_item):
                                 if hasattr(request.app.state, "pubsub"):
-                                    await request.app.state.pubsub.broadcast({
-                                        "type": "anthropic_event",
-                                        "payload": ev,
-                                        "request_id": request_id
-                                    })
+                                    await request.app.state.pubsub.broadcast(
+                                        {
+                                            "type": "anthropic_event",
+                                            "payload": ev,
+                                            "request_id": request_id,
+                                        }
+                                    )
                                 yield encode_sse(ev["event"], ev["data"])
 
                     while not sentinel_seen:
@@ -519,28 +525,30 @@ async def messages(request: Request):
                                     "error": {"type": "api_error", "message": str(exc)},
                                 }
                             if hasattr(request.app.state, "pubsub"):
-                                await request.app.state.pubsub.broadcast({
-                                    "type": "error",
-                                    "payload": anth,
-                                    "request_id": request_id
-                                })
+                                await request.app.state.pubsub.broadcast(
+                                    {"type": "error", "payload": anth, "request_id": request_id}
+                                )
                             yield encode_sse("error", anth)
                             return
                         else:
                             if isinstance(item, dict):
                                 if hasattr(request.app.state, "pubsub"):
-                                    await request.app.state.pubsub.broadcast({
-                                        "type": "openai_chunk",
-                                        "payload": item,
-                                        "request_id": request_id
-                                    })
+                                    await request.app.state.pubsub.broadcast(
+                                        {
+                                            "type": "openai_chunk",
+                                            "payload": item,
+                                            "request_id": request_id,
+                                        }
+                                    )
                                 for ev in st.feed(item):
                                     if hasattr(request.app.state, "pubsub"):
-                                        await request.app.state.pubsub.broadcast({
-                                            "type": "anthropic_event",
-                                            "payload": ev,
-                                            "request_id": request_id
-                                        })
+                                        await request.app.state.pubsub.broadcast(
+                                            {
+                                                "type": "anthropic_event",
+                                                "payload": ev,
+                                                "request_id": request_id,
+                                            }
+                                        )
                                     yield encode_sse(ev["event"], ev["data"])
 
                     # Finalize with double-close protection (port from claude-code-router)
@@ -556,7 +564,7 @@ async def messages(request: Request):
                             session_id=session_obj.id,
                             tool_id_map=active_tool_id_map,
                             transformer_chain=transformer_chain,
-                            tokens_inc=st._usage_input + st._usage_output
+                            tokens_inc=st._usage_input + st._usage_output,
                         )
 
                     inc_requests(requested_model, True, 200)
