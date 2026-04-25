@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
+import orjson
 import tiktoken
 
 log = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def _walk(obj: Any, parts: list[str]) -> None:
     elif obj is None or isinstance(obj, bool):
         pass
     else:
-        parts.append(json.dumps(obj))
+        parts.append(orjson.dumps(obj).decode())
 
 
 def approximate_tokens(body: dict) -> int:
