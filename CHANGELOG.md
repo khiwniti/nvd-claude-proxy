@@ -5,6 +5,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.9] — 2026-05-06
+
+### Added
+- **Canonical IR (Phase 3)** — Replaced soft dictionaries with frozen Pydantic v2 `CanonicalRequest` objects to enforce strict schema parity and discriminated unions at the translation boundary.
+- **Server Tool Registry (Phase 4)** — Completely re-architected the server tool injector to be YAML data-driven (`config/server_tools.yaml`), supporting dynamic injection of schemas for Anthropic-specific tools (web_search, bash, computer, etc.).
+- **Strict Version & Beta Negotiation** — Enforces `anthropic-version: 2023-06-01` and implements `BetaNegotiator` to validate requested beta features.
+- **Token Reconciliation (P1-15)** — Compares upstream NVIDIA output tokens with local `tiktoken` re-tokenization of accumulated output to detect usage drift and automatically reconcile missed tokens.
+- **TTL Cache Breakdown** — `cache_creation_input_tokens` is now accurately broken down into `ephemeral_5m` and `ephemeral_1h` buckets based on the `cache_control` TTL marker.
+
+### Changed
+- Flattened `anyOf`/`oneOf`/`allOf` JSON-Schemas to simple object schemas to guarantee compatibility with strict upstream vLLM parsers.
+- Collision-safe SHA-256 truncation is now applied to generated tool names exceeding the 64-character limit.
+
+---
+
 ## [1.1.8] — 2026-05-06
 
 ### Added
