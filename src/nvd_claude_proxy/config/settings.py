@@ -44,8 +44,8 @@ class Settings(BaseSettings):
 
     # Rate limiting (RPM)
     rate_limit_rpm: int = Field(0, alias="RATE_LIMIT_RPM")
-    # Max request body size in megabytes (0 = unlimited).
-    max_request_body_mb: float = Field(0.0, alias="MAX_REQUEST_BODY_MB")
+    # Max request body size in megabytes.
+    max_request_body_mb: float = Field(32.0, le=32.0, alias="MAX_REQUEST_BODY_MB")
 
 
 @lru_cache

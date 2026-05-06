@@ -471,7 +471,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if auth.lower().startswith("bearer "):
                 presented = auth[7:].strip()
 
-        if presented != s.proxy_api_key:
+        import hmac
+
+        if not hmac.compare_digest(presented or "", s.proxy_api_key or ""):
             _log.warning(
                 "auth.failed",
                 path=request.url.path,

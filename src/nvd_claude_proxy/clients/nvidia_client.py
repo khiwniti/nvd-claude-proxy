@@ -17,7 +17,7 @@ _log = structlog.get_logger("nvd_claude_proxy.nvidia")
 # 5xx responses and transient network errors are candidates for retry. 429
 # means we're hitting the 40 RPM free-tier cap — retrying with backoff respects
 # it but won't help once we're truly rate-limited; still worth one gentle try.
-_RETRY_STATUSES = {429, 500, 502, 503, 504}
+_RETRY_STATUSES = {408, 409, 429, 500, 502, 503, 504}
 
 
 class NvidiaClient:

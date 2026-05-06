@@ -128,20 +128,38 @@ def _build_tool_schemas(body: dict) -> dict[str, dict]:
 
 @router.post("/v1/messages")
 async def messages(request: Request):
-    idempotency_key = request.headers.get("anthropic-idempotency-key")
-    if idempotency_key:
-        storage = getattr(request.app.state, "storage", None)
-        if storage and hasattr(storage, "get_idempotency"):
-            cached_resp = await storage.get_idempotency(idempotency_key)
-            if cached_resp:
-                _log.info("messages.idempotent_replay", key=idempotency_key)
-                return ORJSONResponse(
-                    cached_resp,
-                    headers=standard_response_headers(new_request_id()),
-                )
-
     body = await request.json()
     request_id = new_request_id()
+
+    idempotency_key = request.headers.get("anthropic-idempotency-key")
+    req_hash = None
+    if idempotency_key:
+        import hashlib
+        import json
+        req_hash = hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+        
+        storage = getattr(request.app.state, "storage", None)
+        if storage and hasattr(storage, "get_idempotency"):
+            cached_data = await storage.get_idempotency(idempotency_key)
+            if cached_data:
+                if cached_data.get("req_hash") != req_hash:
+                    _log.warning("messages.idempotency_mismatch", key=idempotency_key[:12] + "...")
+                    return ORJSONResponse(
+                        {
+                            "type": "error",
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": "Idempotency key mismatch: request body differs from original request.",
+                            },
+                        },
+                        status_code=400,
+                        headers=standard_response_headers(request_id),
+                    )
+                _log.info("messages.idempotent_replay", key=idempotency_key[:12] + "...")
+                return ORJSONResponse(
+                    cached_data.get("response", {}),
+                    headers=standard_response_headers(new_request_id()),
+                )
 
     # ── Phase 4: Anthropic Version/Beta Negotiation ──────────────────────────
     anthropic_version = request.headers.get("anthropic-version")
@@ -419,10 +437,12 @@ async def messages(request: Request):
                 tokens_inc=in_tok + out_tok,
             )
 
-        if idempotency_key:
+        if idempotency_key and req_hash:
             storage = getattr(request.app.state, "storage", None)
             if storage and hasattr(storage, "save_idempotency"):
-                await storage.save_idempotency(idempotency_key, out)
+                await storage.save_idempotency(
+                    idempotency_key, {"req_hash": req_hash, "response": out}
+                )
 
         _log.info(
             "messages.complete",
@@ -657,6 +677,11 @@ async def messages(request: Request):
                     return  # success — stop iterating the failover chain
 
                 finally:
+                    if not sentinel_seen:
+                        _log.warning("stream.cancelled", request_id=request_id)
+                        from ..util.metrics import COUNTER_REQUESTS
+                        if COUNTER_REQUESTS:
+                            COUNTER_REQUESTS.labels(model=requested_model, stream="true", status="cancelled").inc()
                     task.cancel()
                     try:
                         await task
