@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.1.10] — 2026-05-06
+
+### Added
+- **Dynamic OpenAPI Generation (Phase 5)** — The `/v1/openapi.json` and `/v1/messages/schema` endpoints now dynamically generate their schemas from the underlying Pydantic v2 `CanonicalRequest` and `CanonicalResponse` models.
+- **Proactive Stream Pings** — The streaming pipeline now features an independent background task that guarantees a `ping` event every 10 seconds, preventing SDK idle timeouts during extended reasoning phases.
+- **Detailed Health Diagnostics** — The `/readyz` endpoint now distinguishes between upstream errors (`auth_failed`, `rate_limited`, `upstream_5xx`, `circuit_open`), greatly improving load-balancer visibility.
+
+### Fixed
+- **Mid-Stream Circuit Breaker** — Streaming connections that encounter transient mid-stream errors (`ReadTimeout`, `ProtocolError`, etc.) now correctly record failures to the global `CircuitBreaker`.
+- **SSRF Protection** — Generalized SSRF protection middleware to walk all arbitrary payload nodes shaped as `{"type": "url", "url": ...}` to safely block dangerous internal URLs across any block type.
+- **Billing Error Mapping** — Added explicit mapping for upstream `402` to Anthropic's `billing_error`.
+
+---
+
 ## [1.1.9] — 2026-05-06
 
 ### Added

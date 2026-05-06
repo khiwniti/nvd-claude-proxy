@@ -147,6 +147,10 @@ class CircuitBreaker:
                 self.half_open_calls = 0
                 self._success_calls = 0
 
+    async def record_failure(self) -> None:
+        """Manually record a failure (useful for streaming connections where call() doesn't wrap the full lifecycle)."""
+        await self._on_failure()
+
     async def force_open(self) -> None:
         async with self._lock:
             self.state = CircuitState.OPEN

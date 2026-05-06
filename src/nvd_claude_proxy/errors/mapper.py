@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-_STATUS_TO_ANTHROPIC_TYPE: dict[int, str] = {
+_STATUS_TO_ANTHROPIC_TYPE = {
     400: "invalid_request_error",
     401: "authentication_error",
+    402: "billing_error",
     403: "permission_error",
     404: "not_found_error",
     413: "request_too_large",

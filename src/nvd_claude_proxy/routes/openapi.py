@@ -577,6 +577,36 @@ ANTHROPIC_OPENAPI_SCHEMA: dict[str, Any] = {
 }
 
 
+from ..schemas.canonical import CanonicalRequest, CanonicalResponse, ErrorResponse
+from pydantic.json_schema import models_json_schema
+
+def _build_dynamic_openapi() -> dict[str, Any]:
+    spec = dict(ANTHROPIC_OPENAPI_SCHEMA)
+    _, top_level_schema = models_json_schema(
+        [
+            (CanonicalRequest, "validation"),
+            (CanonicalResponse, "validation"),
+            (ErrorResponse, "validation")
+        ],
+        ref_template="#/components/schemas/{model}",
+    )
+    defs = top_level_schema.get("$defs", {})
+    
+    # Ensure components/schemas exists
+    components = spec.setdefault("components", {})
+    schemas = components.setdefault("schemas", {})
+    
+    # We overlay the generated defs on top of any existing hardcoded schemas
+    # But we specifically map CanonicalRequest to MessageRequest and CanonicalResponse to Message
+    # to match the paths in the hardcoded paths section.
+    if "CanonicalRequest" in defs:
+        schemas["MessageRequest"] = defs.pop("CanonicalRequest")
+    if "CanonicalResponse" in defs:
+        schemas["Message"] = defs.pop("CanonicalResponse")
+        
+    schemas.update(defs)
+    return spec
+
 @router.get("/v1/openapi.json", include_in_schema=False)
 async def get_openapi_spec(request: Request) -> ORJSONResponse:
     """Return the Anthropic-shaped OpenAPI specification.
@@ -586,7 +616,7 @@ async def get_openapi_spec(request: Request) -> ORJSONResponse:
     """
     request_id = new_request_id()
     return ORJSONResponse(
-        ANTHROPIC_OPENAPI_SCHEMA,
+        _build_dynamic_openapi(),
         headers=standard_response_headers(request_id),
     )
 
@@ -598,14 +628,16 @@ async def get_messages_schema(request: Request) -> ORJSONResponse:
     Useful for SDK code generation and validation.
     """
     request_id = new_request_id()
+    full_spec = _build_dynamic_openapi()
+    schemas = full_spec["components"]["schemas"]
 
     schema = {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "MessageRequest": ANTHROPIC_OPENAPI_SCHEMA["components"]["schemas"]["MessageRequest"],
-        "Message": ANTHROPIC_OPENAPI_SCHEMA["components"]["schemas"]["Message"],
-        "ContentBlock": ANTHROPIC_OPENAPI_SCHEMA["components"]["schemas"]["ContentBlock"],
-        "Tool": ANTHROPIC_OPENAPI_SCHEMA["components"]["schemas"]["Tool"],
-        "ErrorResponse": ANTHROPIC_OPENAPI_SCHEMA["components"]["schemas"]["ErrorResponse"],
+        "MessageRequest": schemas.get("MessageRequest", {}),
+        "Message": schemas.get("Message", {}),
+        "ContentBlock": schemas.get("ContentBlock", {}),
+        "Tool": schemas.get("ToolUseBlock", {}), # Mapping for tool use block
+        "ErrorResponse": schemas.get("ErrorResponse", {}),
     }
 
     return ORJSONResponse(

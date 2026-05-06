@@ -348,12 +348,12 @@ async def messages(request: Request):
     )
 
     client: NvidiaClient = request.app.state.nvidia_client
+    circuit_breaker = await get_circuit_breaker_registry().get_or_create("nvidia_api")
 
     if not stream:
         # Non-streaming: walk the failover chain on 5xx / 429.
         t0 = time.monotonic()
         resp = None
-        circuit_breaker = await get_circuit_breaker_registry().get_or_create("nvidia_api")
 
         for attempt_idx, try_spec in enumerate(spec_chain):
             if attempt_idx > 0:
@@ -544,7 +544,16 @@ async def messages(request: Request):
                     finally:
                         await upstream_queue.put(SENTINEL)
 
+                async def _ping_scheduler() -> None:
+                    try:
+                        while True:
+                            await asyncio.sleep(10.0)
+                            await upstream_queue.put(("__ping__", None))
+                    except asyncio.CancelledError:
+                        pass
+
                 task = asyncio.create_task(pump())
+                ping_task = asyncio.create_task(_ping_scheduler())
                 try:
                     event_id_counter = 1
 
@@ -633,8 +642,25 @@ async def messages(request: Request):
                             continue
                         if item is SENTINEL:
                             sentinel_seen = True
+                        elif isinstance(item, tuple) and item and item[0] == "__ping__":
+                            yield _encode_event("ping", {"type": "ping"})
                         elif isinstance(item, tuple) and item and item[0] == "__error__":
                             exc = item[1]
+                            is_transient = isinstance(
+                                exc,
+                                (
+                                    httpx.ReadError,
+                                    httpx.ReadTimeout,
+                                    httpx.LocalProtocolError,
+                                    httpx.RemoteProtocolError,
+                                ),
+                            )
+                            if is_transient or (
+                                isinstance(exc, httpx.HTTPStatusError)
+                                and exc.response.status_code >= 500
+                            ):
+                                await circuit_breaker.record_failure()
+
                             if isinstance(exc, httpx.HTTPStatusError):
                                 try:
                                     upstream_body = exc.response.json()
@@ -719,13 +745,40 @@ async def messages(request: Request):
                         if COUNTER_REQUESTS:
                             COUNTER_REQUESTS.labels(model=requested_model, stream="true", status="cancelled").inc()
                     task.cancel()
+                    ping_task.cancel()
                     try:
                         await task
+                        await ping_task
                     except (asyncio.CancelledError, Exception):
                         pass
 
         finally:
             pass  # client is shared — do not close here
+
+    try:
+        await circuit_breaker._before_call()
+    except CircuitBreakerOpenError:
+        rid = new_request_id()
+        _log.error(
+            "messages.circuit_breaker_open",
+            request_id=rid,
+            upstream="nvidia_api",
+            retry_after=circuit_breaker.config.recovery_timeout
+            if hasattr(circuit_breaker, "config")
+            else 30,
+        )
+        err_headers = standard_response_headers(rid)
+        return ORJSONResponse(
+            {
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": "Upstream API temporarily unavailable. Please retry.",
+                },
+            },
+            status_code=503,
+            headers=err_headers,
+        )
 
     return StreamingResponse(
         gen(),

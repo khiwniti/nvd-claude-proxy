@@ -108,37 +108,19 @@ def is_url_blocked(url: str) -> tuple[bool, str]:
 
 
 def extract_urls_from_body(body: dict, path: str = "") -> list[tuple[str, str]]:
-    """Extract only URLs that the proxy/upstream may dereference.
+    """Extract URLs from any {"type": "url", "url": "..."} node in the payload.
 
-    Claude Code and Playwright routinely put local/private URLs in ordinary
-    text, tool inputs, tool results, DOM snapshots, and tool schemas. Blocking
-    those strings breaks compatibility before the model can reason about the
-    tool result. SSRF protection should only inspect structured URL sources
-    that this proxy forwards as fetchable media/document inputs, not every URL
-    shaped substring in the conversation.
-
-    Returns:
-        List of (url, location_path) tuples
+    P2-7: Generalised to walk any node matching the source.type="url" shape
+    across the entire payload to catch all document/image/future block types
+    that the upstream might try to dereference.
     """
     urls: list[tuple[str, str]] = []
 
-    def add_source_url(source: Any, current_path: str) -> None:
-        if not isinstance(source, dict):
-            return
-        if source.get("type") == "url" and isinstance(source.get("url"), str):
-            urls.append((source["url"], f"{current_path}.url"))
-
     def walk(obj: Any, current_path: str) -> None:
         if isinstance(obj, dict):
-            block_type = obj.get("type")
-            # Anthropic image/document blocks can carry `source: {type: "url"}`.
-            # These are the only URLs the proxy translates as actual remote
-            # content. Do not scan arbitrary keys named url/href/src in tool
-            # payloads or text snapshots. Some Claude Code/tool payloads contain
-            # nested dicts under keys named `type`, so guard before membership.
-            if isinstance(block_type, str) and block_type in {"image", "document"}:
-                add_source_url(obj.get("source"), f"{current_path}.source")
-
+            if obj.get("type") == "url" and isinstance(obj.get("url"), str):
+                urls.append((obj["url"], f"{current_path}.url"))
+            
             for key, value in obj.items():
                 walk(value, f"{current_path}.{key}" if current_path else key)
         elif isinstance(obj, list):

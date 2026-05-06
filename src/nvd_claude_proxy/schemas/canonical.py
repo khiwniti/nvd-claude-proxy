@@ -157,3 +157,13 @@ class CanonicalResponse(BaseModel):
     ]
     stop_sequence: str | None = None
     usage: CanonicalUsage = Field(default_factory=CanonicalUsage)
+
+
+class ErrorDetails(BaseModel):
+    type: str
+    message: str
+
+class ErrorResponse(BaseModel):
+    """Canonical Error Response."""
+    type: Literal["error"] = "error"
+    error: ErrorDetails
