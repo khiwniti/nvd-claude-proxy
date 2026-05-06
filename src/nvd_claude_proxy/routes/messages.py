@@ -520,13 +520,23 @@ async def messages(request: Request):
 
                 task = asyncio.create_task(pump())
                 try:
+                    event_id_counter = 1
+
+                    def _encode_event(event_type: str, data: dict) -> bytes:
+                        nonlocal event_id_counter
+                        if event_type == "ping":
+                            return encode_sse(event_type, data)
+                        ev_id = str(event_id_counter)
+                        event_id_counter += 1
+                        return encode_sse(event_type, data, event_id=ev_id)
+
                     # Peek at the first item to detect 5xx before any output.
                     try:
                         first_item: object = await asyncio.wait_for(
                             upstream_queue.get(), timeout=_PING_INTERVAL_SECONDS
                         )
                     except asyncio.TimeoutError:
-                        yield encode_sse("ping", {"type": "ping"})
+                        yield _encode_event("ping", {"type": "ping"})
                         first_item = await upstream_queue.get()
 
                     # Failover status (5xx or 429) before first chunk.
@@ -561,7 +571,7 @@ async def messages(request: Request):
                                 "type": "error",
                                 "error": {"type": "api_error", "message": str(exc)},
                             }
-                        yield encode_sse("error", anth)
+                        yield _encode_event("error", anth)
                         return
 
                     # Normal path: process first_item then drain the queue.
@@ -585,7 +595,7 @@ async def messages(request: Request):
                                             "request_id": request_id,
                                         }
                                     )
-                                yield encode_sse(ev.event, ev.data)
+                                yield _encode_event(ev.event, ev.data)
 
                     while not sentinel_seen:
                         try:
@@ -593,7 +603,7 @@ async def messages(request: Request):
                                 upstream_queue.get(), timeout=_PING_INTERVAL_SECONDS
                             )
                         except asyncio.TimeoutError:
-                            yield encode_sse("ping", {"type": "ping"})
+                            yield _encode_event("ping", {"type": "ping"})
                             continue
                         if item is SENTINEL:
                             sentinel_seen = True
@@ -620,7 +630,7 @@ async def messages(request: Request):
                                 await request.app.state.pubsub.broadcast(
                                     {"type": "error", "payload": anth, "request_id": request_id}
                                 )
-                            yield encode_sse("error", anth)
+                            yield _encode_event("error", anth)
                             return
                         else:
                             if isinstance(item, dict):
@@ -641,12 +651,12 @@ async def messages(request: Request):
                                                 "request_id": request_id,
                                             }
                                         )
-                                    yield encode_sse(ev.event, ev.data)
+                                    yield _encode_event(ev.event, ev.data)
 
                     # Finalize with double-close protection (port from claude-code-router)
                     try:
                         for ev in pipeline.finalize():
-                            yield encode_sse(ev.event, ev.data)
+                            yield _encode_event(ev.event, ev.data)
                     except Exception:
                         _log.debug("stream.finalize_error", exc_info=True)
 

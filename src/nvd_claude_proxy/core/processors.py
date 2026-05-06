@@ -49,6 +49,16 @@ class BaseProcessor(StreamProcessor):
 
     def _close_open_block(self, state: StreamState) -> Iterable[TranslatedEvent]:
         if state.open_block_type is not None and state.open_block_index is not None:
+            if state.open_block_type == "thinking":
+                from ..util.ids import new_thinking_signature
+                yield self._emit(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": state.open_block_index,
+                        "delta": {"type": "signature_delta", "signature": new_thinking_signature()},
+                    },
+                )
             yield self._emit(
                 "content_block_stop",
                 {"type": "content_block_stop", "index": state.open_block_index},

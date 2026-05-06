@@ -202,6 +202,8 @@ def _anthropic_message_to_openai(
             openai_id = tool_id_map.anthropic_to_openai(tid)
             raw = block.get("content", "")
 
+            is_error = block.get("is_error", False)
+            
             # Vision passthrough for tool results
             if isinstance(raw, list) and spec.supports_vision:
                 content_blocks: list[dict] = []
@@ -235,6 +237,13 @@ def _anthropic_message_to_openai(
                         else:
                             flat.append("[image]")
                 raw = "\n".join(flat)
+
+            if is_error:
+                if isinstance(raw, str):
+                    raw = f"<error>{raw}</error>"
+                elif isinstance(raw, list):
+                    raw.insert(0, {"type": "text", "text": "<error>"})
+                    raw.append({"type": "text", "text": "</error>"})
 
             tool_result_messages.append(
                 {

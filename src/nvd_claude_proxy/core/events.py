@@ -18,6 +18,7 @@ class TranslatedEvent:
 
     event: str
     data: dict[str, Any]
+    id: str | None = None
 
 
 @dataclass(slots=True)
@@ -27,6 +28,7 @@ class StreamState:
     message_id: str
     model_name: str
     next_index: int = 0
+    next_event_id: int = 1
     open_block_type: Literal["text", "thinking", "tool_use"] | None = None
     open_block_index: int | None = None
 

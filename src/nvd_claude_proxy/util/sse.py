@@ -4,9 +4,14 @@ import orjson
 from dataclasses import dataclass
 
 
-def encode_sse(event: str, data: dict) -> bytes:
+def encode_sse(event: str, data: dict, event_id: str | None = None) -> bytes:
     """Anthropic SSE frame: `event: X\ndata: {json}\n\n`."""
-    return b"event: " + event.encode() + b"\ndata: " + orjson.dumps(data) + b"\n\n"
+    parts = []
+    if event_id is not None:
+        parts.append(b"id: " + event_id.encode("utf-8") + b"\n")
+    parts.append(b"event: " + event.encode("utf-8") + b"\n")
+    parts.append(b"data: " + orjson.dumps(data) + b"\n\n")
+    return b"".join(parts)
 
 
 @dataclass

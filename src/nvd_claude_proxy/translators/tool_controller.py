@@ -8,7 +8,6 @@ from typing import Any
 import structlog
 from nvd_claude_proxy.config.models import CapabilityManifest
 from nvd_claude_proxy.translators.tool_translator import ToolIdMap
-from nvd_claude_proxy.translators.tool_fuzzy_mapper import FuzzyToolMapper
 
 logger = structlog.get_logger(__name__)
 
@@ -57,8 +56,6 @@ class ToolInvocationController:
                 except Exception:  # noqa: BLE001
                     pass  # Malformed schema — skip; model will return what it returns.
 
-        self.fuzzy_mapper = FuzzyToolMapper(set(self._tool_schemas.keys()))
-
     # ── validation ────────────────────────────────────────────────────────
 
     def validate_schema(self, name: str, args: dict[str, Any]) -> bool:
@@ -106,21 +103,16 @@ class ToolInvocationController:
         return name in self._tool_schemas
 
     def resolve_tool_name(self, name: str) -> str | None:
-        """Resolve a potentially hallucinated tool name to a valid one.
-
-        Returns the valid name if a match is found, else None.
+        """Return the tool name if it is in the registered schemas, else None.
+        No fuzzy matching is performed to maintain deterministic execution.
         """
         if name in self._tool_schemas:
             return name
-
-        resolved = self.fuzzy_mapper.map_name(name)
-        if resolved and resolved != name:
-            logger.info("tool.fuzzy_resolved", original=name, resolved=resolved)
-        return resolved
+        return None
 
     def resolve_tool_arguments(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        """Resolve potentially hallucinated argument keys."""
-        return self.fuzzy_mapper.map_arguments(tool_name, arguments)
+        """Return arguments unchanged."""
+        return arguments
 
     def has_registered_schemas(self) -> bool:
         """Return True when request tool schemas were provided."""
