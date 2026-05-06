@@ -94,6 +94,7 @@ _FINISH_TO_STOP: dict[str | None, str] = {
     "tool_calls": "tool_use",
     "function_call": "tool_use",
     "content_filter": "refusal",
+    "async-yield": "pause_turn",
     None: "end_turn",
 }
 

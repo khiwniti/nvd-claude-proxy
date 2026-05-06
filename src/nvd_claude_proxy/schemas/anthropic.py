@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 class CacheControlEphemeral(BaseModel):
     type: Literal["ephemeral"] = "ephemeral"
+    ttl: Literal["5m", "1h"] | None = None
 
 
 # ── Content block types ────────────────────────────────────────────────────────
@@ -43,9 +44,14 @@ class ImageSourceURL(BaseModel):
     url: str
 
 
+class FileSource(BaseModel):
+    type: Literal["file"] = "file"
+    file_id: str
+
+
 class ImageBlock(BaseModel):
     type: Literal["image"] = "image"
-    source: ImageSourceBase64 | ImageSourceURL
+    source: ImageSourceBase64 | ImageSourceURL | FileSource
     cache_control: CacheControlEphemeral | None = None
 
 
@@ -69,7 +75,7 @@ class DocumentSourceURL(BaseModel):
     url: str
 
 
-DocumentSource = Union[DocumentSourceBase64, DocumentSourceText, DocumentSourceURL]
+DocumentSource = Union[DocumentSourceBase64, DocumentSourceText, DocumentSourceURL, FileSource]
 
 
 class DocumentBlock(BaseModel):
@@ -108,6 +114,42 @@ class RedactedThinkingBlock(BaseModel):
     data: str
 
 
+# Server tool and MCP block types
+class SearchResultBlock(BaseModel):
+    type: Literal["search_result"] = "search_result"
+    content: str
+    title: str | None = None
+    url: str | None = None
+
+
+class WebSearchToolResultBlock(BaseModel):
+    type: Literal["web_search_tool_result"] = "web_search_tool_result"
+    search_results: list[SearchResultBlock] = Field(default_factory=list)
+    is_error: bool | None = None
+
+
+class CodeExecutionToolResultBlock(BaseModel):
+    type: Literal["code_execution_tool_result"] = "code_execution_tool_result"
+    output: str | None = None
+    error: str | None = None
+    is_error: bool | None = None
+
+
+class MCPToolUseBlock(BaseModel):
+    type: Literal["mcp_tool_use"] = "mcp_tool_use"
+    id: str
+    name: str
+    input: dict[str, Any] = Field(default_factory=dict)
+    server_name: str
+
+
+class MCPToolResultBlock(BaseModel):
+    type: Literal["mcp_tool_result"] = "mcp_tool_result"
+    tool_use_id: str
+    content: Any = ""
+    is_error: bool | None = None
+
+
 ContentBlock = Annotated[
     Union[
         TextBlock,
@@ -117,6 +159,11 @@ ContentBlock = Annotated[
         ToolResultBlock,
         ThinkingBlock,
         RedactedThinkingBlock,
+        SearchResultBlock,
+        WebSearchToolResultBlock,
+        CodeExecutionToolResultBlock,
+        MCPToolUseBlock,
+        MCPToolResultBlock,
     ],
     Field(discriminator="type"),
 ]
@@ -201,6 +248,8 @@ class MessagesRequest(BaseModel):
     tool_choice: Any = None
     thinking: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
+    mcp_servers: list[dict[str, Any]] | None = None
+    container: dict[str, Any] | None = None
     # Prompt caching (accepted, not forwarded to NIM)
     # service_tier accepted and silently ignored
     service_tier: str | None = None

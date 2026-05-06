@@ -1,0 +1,22 @@
+# config/server_tools.yaml
+# Registry of Anthropic server-side tools and their associated versions/betas.
+
+- family: web_search
+  versions: [20250305, 20250728]
+  beta: web-search-2025-03-05
+  schema: "src/nvd_claude_proxy/data/web_search.json"
+
+- family: code_execution
+  versions: [20250522, 20260120]
+  beta: code-execution-2025-05-22
+  schema: "src/nvd_claude_proxy/data/code_execution.json"
+
+- family: text_editor
+  versions: [20250124, 20250728]
+  beta: computer-use-2024-10-22
+  schema: "src/nvd_claude_proxy/data/text_editor.json"
+
+- family: bash
+  versions: [20250124]
+  beta: computer-use-2024-10-22
+  schema: "src/nvd_claude_proxy/data/bash.json"

@@ -123,9 +123,8 @@ _FINISH_TO_STOP: dict[str, str] = {
     "length": "max_tokens",
     "tool_calls": "tool_use",
     "function_call": "tool_use",
-    # content_filter maps to end_turn — "refusal" is not a valid Anthropic
-    # stop_reason and causes SDK deserialization errors.
-    "content_filter": "end_turn",
+    "content_filter": "refusal",
+    "async-yield": "pause_turn",
 }
 
 

@@ -76,19 +76,35 @@ class ModelRegistry:
         return chain
 
     def resolve(self, claude_model_name: str | None) -> CapabilityManifest:
-        """Resolve a Claude-style model name to a configured CapabilityManifest."""
+        """Resolve a Claude-style model name to a configured CapabilityManifest.
+        Uses longest-prefix matching and strips version suffixes.
+        """
         name = (claude_model_name or "").strip()
-        if name and name in self.specs:
+        if not name:
+            return self.specs.get(self.default_big) or next(iter(self.specs.values()))
+            
+        if name in self.specs:
             return self.specs[name]
-        # Longest prefix wins.
+            
+        # 1. Strip common version suffixes and retry exact match
+        import re
+        # Matches -20240101, -v1, -v2, etc.
+        stripped = re.sub(r"-(?:\d{8}|v\d+)$", "", name)
+        if stripped != name and stripped in self.specs:
+            return self.specs[stripped]
+
+        # 2. Longest prefix wins.
         best: tuple[int, str] | None = None
         for prefix, alias in self.prefix_fallbacks.items():
             if name.startswith(prefix) and (best is None or len(prefix) > best[0]):
                 best = (len(prefix), alias)
+        
         if best and best[1] in self.specs:
             return self.specs[best[1]]
+            
         if self.default_big in self.specs:
             return self.specs[self.default_big]
+            
         # Last resort — return any spec so the proxy stays usable.
         return next(iter(self.specs.values()))
 

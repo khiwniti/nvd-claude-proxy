@@ -129,6 +129,10 @@ def create_app() -> FastAPI:
     )
     app.state.settings = settings
     app.state.model_registry = load_model_registry(settings.model_config_path)
+    
+    from .config.server_tools import load_server_tool_registry
+    app.state.server_tool_registry = load_server_tool_registry()
+    
     app.state.pubsub = PubSub()
     _install_sighup_handler(app)
 

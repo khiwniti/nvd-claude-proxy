@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "language": { "type": "string", "enum": ["python", "javascript", "typescript"] },
+    "code": { "type": "string" }
+  },
+  "required": ["language", "code"]
+}

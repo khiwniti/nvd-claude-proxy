@@ -40,6 +40,8 @@ class StreamState:
     # Usage and Budget
     usage_input: int = 0
     usage_output: int = 0
+    accumulated_text: str = ""
+    accumulated_tool_json: str = ""
     estimated_input_tokens: int = 0
     thinking_chars: int = 0
     thinking_budget_hit: bool = False
@@ -48,6 +50,8 @@ class StreamState:
     # Cache Accounting
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
+    ephemeral_5m_input_tokens: int = 0
+    ephemeral_1h_input_tokens: int = 0
 
 
 class StreamProcessor(ABC):

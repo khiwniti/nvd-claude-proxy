@@ -23,31 +23,38 @@ def new_request_id() -> str:
 def standard_response_headers(
     request_id: str,
     *,
-    rpm_limit: int = 4000,
-    tpm_limit: int = 2_000_000,
+    rpm_limit: int | None = None,
+    rpm_remaining: int | None = None,
+    tpm_limit: int | None = None,
+    tpm_remaining: int | None = None,
 ) -> dict[str, str]:
     """Anthropic-compatible response headers.
 
-    We fabricate the rate-limit headers. The values are sized to modern NIM
-    quotas (4k RPM) so SDKs don't back off unnecessarily.
+    P1-14: Rate-limit headers are now optional. If unknown, they are omitted
+    to avoid confusing SDK backoff logic with fabricated values.
     """
     now = int(time.time())
-    return {
-        # Required by ALL official Anthropic SDKs — TypeScript SDK throws if absent.
-        # Must match the stable API version string (2023-06-01); 2024-01-01 does
-        # not exist in Anthropic's versioning scheme and trips SDK validation checks.
+    headers = {
         "anthropic-version": "2023-06-01",
         "x-anthropic-type": "anthropic-api-response",
         "anthropic-request-id": request_id,
-        "request-id": request_id,  # alias some SDKs read
+        "request-id": request_id,
         "anthropic-organization-id": "nvd-proxy-local",
-        "anthropic-ratelimit-requests-limit": str(rpm_limit),
-        "anthropic-ratelimit-requests-remaining": str(rpm_limit),
-        "anthropic-ratelimit-requests-reset": _iso8601(now + 60),
-        "anthropic-ratelimit-tokens-limit": str(tpm_limit),
-        "anthropic-ratelimit-tokens-remaining": str(tpm_limit),
-        "anthropic-ratelimit-tokens-reset": _iso8601(now + 60),
     }
+
+    if rpm_limit is not None:
+        headers["anthropic-ratelimit-requests-limit"] = str(rpm_limit)
+    if rpm_remaining is not None:
+        headers["anthropic-ratelimit-requests-remaining"] = str(rpm_remaining)
+        headers["anthropic-ratelimit-requests-reset"] = _iso8601(now + 60)
+
+    if tpm_limit is not None:
+        headers["anthropic-ratelimit-tokens-limit"] = str(tpm_limit)
+    if tpm_remaining is not None:
+        headers["anthropic-ratelimit-tokens-remaining"] = str(tpm_remaining)
+        headers["anthropic-ratelimit-tokens-reset"] = _iso8601(now + 60)
+
+    return headers
 
 
 def _iso8601(epoch_s: int) -> str:

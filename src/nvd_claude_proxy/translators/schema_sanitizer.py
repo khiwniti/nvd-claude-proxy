@@ -48,6 +48,15 @@ def sanitize_tool_name(name: str) -> str:
     # Replace any invalid char with `_`, then collapse runs of `_`.
     cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", name).strip("_")
     cleaned = re.sub(r"_+", "_", cleaned) or "tool"
+
+    # Truncate to 64 chars. If we truncate, add a hash suffix to avoid collisions.
+    if len(cleaned) > 64 or cleaned != name:
+        if len(cleaned) > 64:
+            import hashlib
+            import base64
+            digest = base64.urlsafe_b64encode(hashlib.sha256(name.encode()).digest())[:8].decode()
+            cleaned = cleaned[:55] + "_" + digest
+
     return cleaned[:64]
 
 
@@ -69,7 +78,26 @@ def _sanitize_schema_node(node: Any, depth: int = 0) -> Any:
         elif k == "items":
             out[k] = _sanitize_schema_node(v, depth + 1)
         elif k in ("anyOf", "oneOf", "allOf") and isinstance(v, list):
-            out[k] = [_sanitize_schema_node(n, depth + 1) for n in v]
+            # NIM-compatible flattening: merge properties/required from all branches.
+            merged_props: dict[str, Any] = {}
+            merged_required: set[str] = set()
+            for branch in v:
+                sanitized_branch = _sanitize_schema_node(branch, depth + 1)
+                if isinstance(sanitized_branch, dict):
+                    if "properties" in sanitized_branch:
+                        merged_props.update(sanitized_branch["properties"])
+                    if "required" in sanitized_branch:
+                        merged_required.update(sanitized_branch["required"])
+            
+            if merged_props:
+                out["type"] = "object"
+                out["properties"] = merged_props
+                if merged_required:
+                    out["required"] = list(merged_required)
+                out["additionalProperties"] = True
+            else:
+                # Fallback: keep original if no properties found
+                out[k] = [_sanitize_schema_node(n, depth + 1) for n in v]
         else:
             out[k] = v
     return out

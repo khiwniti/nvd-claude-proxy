@@ -310,9 +310,17 @@ def translate_request(
     spec: CapabilityManifest,
     tool_id_map: ToolIdMap,
     transformer_chain: TransformerChain | None = None,
+    server_tool_registry: Any | None = None,
 ) -> dict:
+    from ..schemas.canonical import CanonicalRequest
+    try:
+        canonical = CanonicalRequest.model_validate(anthropic_body)
+    except Exception:
+        canonical = None
+
     openai_messages: list[dict] = []
-    system_content = _flatten_system(anthropic_body.get("system"), spec)
+    system_raw = canonical.system if canonical else anthropic_body.get("system")
+    system_content = _flatten_system(system_raw, spec)
 
     # Prepend tool protocol to system prompt for models with many tools
     if (tools := anthropic_body.get("tools")) and len(tools) > 30:

@@ -163,14 +163,14 @@ async def messages(request: Request):
 
     # ── Phase 4: Anthropic Version/Beta Negotiation ──────────────────────────
     anthropic_version = request.headers.get("anthropic-version")
-    if anthropic_version and anthropic_version not in ("2023-06-01",):
-        _log.warning("messages.unsupported_version", version=anthropic_version)
+    if anthropic_version != "2023-06-01":
+        _log.warning("messages.invalid_version", version=anthropic_version)
         return ORJSONResponse(
             {
                 "type": "error",
                 "error": {
                     "type": "invalid_request_error",
-                    "message": f"Unsupported anthropic-version: {anthropic_version}",
+                    "message": f"Unsupported or missing anthropic-version: {anthropic_version}. Only '2023-06-01' is supported.",
                 },
             },
             status_code=400,
@@ -178,16 +178,29 @@ async def messages(request: Request):
         )
 
     betas = _parse_beta_header(request)
-    supported_betas = {
-        "prompt-caching-2024-07-31",
-        "computer-use-2024-10-22",
-        "pdfs-2024-09-25",
-        "token-counting-2024-11-01",
-    }
+    from ..util.beta_negotiator import BetaNegotiator
+
+    negotiator = BetaNegotiator(betas)
+    try:
+        negotiator.validate_request(body)
+    except ValueError as exc:
+        _log.warning("messages.beta_validation_failed", error=str(exc))
+        return ORJSONResponse(
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": str(exc),
+                },
+            },
+            status_code=400,
+            headers=standard_response_headers(request_id),
+        )
+
+    unsupported_betas = negotiator.get_unsupported()
     degradation = DegradationContext()
-    for b in betas:
-        if b not in supported_betas:
-            degradation.add_unsupported_beta(b)
+    for b in unsupported_betas:
+        degradation.add_unsupported_beta(b)
 
     # ── Request Validation (Production Hardening) ─────────────────────────
     if _HAS_VALIDATORS:
@@ -282,7 +295,13 @@ async def messages(request: Request):
     tool_controller = ToolInvocationController(spec, tool_id_map, tool_schemas=tool_schemas)
 
     try:
-        payload = translate_request(body, spec, tool_id_map, transformer_chain=transformer_chain)
+        payload = translate_request(
+            body, 
+            spec, 
+            tool_id_map, 
+            transformer_chain=transformer_chain,
+            server_tool_registry=getattr(request.app.state, "server_tool_registry", None)
+        )
     except ContextOverflowError as exc:
         _log.warning(
             "messages.context_overflow",
@@ -475,7 +494,12 @@ async def messages(request: Request):
             for attempt_idx, try_spec in enumerate(spec_chain):
                 if attempt_idx > 0:
                     active_tool_id_map = ToolIdMap()
-                    active_payload = translate_request(body, try_spec, active_tool_id_map)
+                    active_payload = translate_request(
+                        body, 
+                        try_spec, 
+                        active_tool_id_map,
+                        server_tool_registry=getattr(request.app.state, "server_tool_registry", None)
+                    )
                     active_tool_controller = ToolInvocationController(
                         try_spec, active_tool_id_map, tool_schemas=tool_schemas
                     )
@@ -495,6 +519,8 @@ async def messages(request: Request):
                     acct = estimate_cache_tokens(body)
                     state.cache_creation_input_tokens = acct.cache_creation_input_tokens
                     state.cache_read_input_tokens = acct.cache_read_input_tokens
+                    state.ephemeral_5m_input_tokens = acct.ephemeral_5m_input_tokens
+                    state.ephemeral_1h_input_tokens = acct.ephemeral_1h_input_tokens
 
                 pipeline = Pipeline(
                     processors=[

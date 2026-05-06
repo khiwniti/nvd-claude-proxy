@@ -14,50 +14,21 @@ from .schema_sanitizer import (
     truncate_description,
 )
 
+from ..config.server_tools import ServerToolRegistry
+
 _log = structlog.get_logger("nvd_claude_proxy.tools")
 
-# Anthropic server-tool `type` strings end in a date. The full catalogue (as of
-# early 2026) — kept explicit rather than just matching `_YYYYMMDD` so we can
-# log which specific tool was dropped.
-_SERVER_TOOL_TYPES = {
-    "web_search_20250305",
-    "web_search_20250728",
-    "bash_20250124",
-    "bash_20250728",
-    "computer_20250124",
-    "computer_20250728",
-    "code_execution_20250522",
-    "code_execution_20260120",
-    "text_editor_20250124",
-    "text_editor_20250728",
-    "memory_20250818",
-}
-# Regex catch-all in case Anthropic releases new dated server tools.
-_DATED_TOOL_RE = re.compile(r".+_(20\d{6})$")
-
-# MCP client tools (anthropic-beta: mcp-client-*) arrive with `type: "custom"`
-# or no type, plus a normal `input_schema`. They behave like regular function
-# tools from the model's POV, so we forward them after sanitization.
 _PASSTHROUGH_TOOL_TYPES = {None, "custom", "function"}
-
-# Per-tool description cap when a request carries many tools. Keeps the
-# per-tool prompt footprint modest without losing intent. Tools are truncated
-# only when the aggregate tool-schema budget is exceeded (see
-# `anthropic_tools_to_openai`).
 _DEFAULT_DESC_CAP = 480
-_TIGHT_DESC_CAP = 200
 
-
-def _is_server_tool(tool: dict) -> bool:
+def _is_server_tool(tool: dict, registry: ServerToolRegistry | None) -> bool:
     t = tool.get("type")
-    if not isinstance(t, str):
+    if not isinstance(t, str) or not registry:
         return False
-    if t in _SERVER_TOOL_TYPES:
-        return True
-    return bool(_DATED_TOOL_RE.match(t))
+    return registry.is_server_tool(t)
 
 
-def _inject_server_tool_schema(tool: dict) -> dict:
+def _inject_server_tool_schema(tool: dict, registry: ServerToolRegistry | None) -> dict:
     """Injects the implicit schema for Anthropic's server tools so NIM models can use them."""
     t_type = str(tool.get("type", ""))
     t_name = tool.get("name", "")
@@ -66,58 +37,12 @@ def _inject_server_tool_schema(tool: dict) -> dict:
     out = dict(tool)
     out["type"] = "function"
 
-    if "bash" in t_type or t_name == "bash":
-        out["name"] = t_name or "bash"
-        out["description"] = "Run bash commands in a stateful shell."
-        out["input_schema"] = {
-            "type": "object",
-            "properties": {"command": {"type": "string"}, "restart": {"type": "boolean"}},
-        }
-    elif "computer" in t_type or t_name == "computer":
-        out["name"] = t_name or "computer"
-        out["description"] = "Control the computer keyboard and mouse."
-        out["input_schema"] = {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": [
-                        "key",
-                        "type",
-                        "mouse_move",
-                        "left_click",
-                        "left_click_drag",
-                        "right_click",
-                        "middle_click",
-                        "double_click",
-                        "screenshot",
-                        "cursor_position",
-                    ],
-                },
-                "coordinate": {"type": "array", "items": {"type": "integer"}},
-                "text": {"type": "string"},
-            },
-            "required": ["action"],
-        }
-    elif "text_editor" in t_type or t_name == "str_replace_editor":
-        out["name"] = t_name or "str_replace_editor"
-        out["description"] = "View and edit files using string replacement."
-        out["input_schema"] = {
-            "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "enum": ["view", "create", "str_replace", "insert", "undo_edit"],
-                },
-                "path": {"type": "string"},
-                "file_text": {"type": "string"},
-                "insert_line": {"type": "integer"},
-                "new_str": {"type": "string"},
-                "old_str": {"type": "string"},
-                "view_range": {"type": "array", "items": {"type": "integer"}},
-            },
-            "required": ["command", "path"],
-        }
+    if registry:
+        spec = registry.get_spec(t_type)
+        if spec:
+            out["name"] = t_name or spec.family
+            out["description"] = f"Anthropic server tool: {spec.family}"
+            out["input_schema"] = spec.schema
 
     return out
 
@@ -128,6 +53,7 @@ def anthropic_tools_to_openai(
     tool_id_map: "ToolIdMap | None" = None,
     max_tools: int | None = None,
     description_cap: int = _DEFAULT_DESC_CAP,
+    server_tool_registry: ServerToolRegistry | None = None,
 ) -> list[dict]:
     """Anthropic tool defs → OpenAI function-tool defs.
 
@@ -142,13 +68,15 @@ def anthropic_tools_to_openai(
     collisions: list[tuple[str, str]] = []
 
     for t in tools or []:
-        if _is_server_tool(t):
-            _log.debug("tools.server_tool_dropped", type=t.get("type"), name=t.get("name"))
-            continue
+        if _is_server_tool(t, server_tool_registry):
+            # Instead of dropping, we now inject the schema if we have one
+            t = _inject_server_tool_schema(t, server_tool_registry)
 
         ttype = t.get("type")
         if ttype is not None and ttype not in _PASSTHROUGH_TOOL_TYPES:
-            _log.debug("tools.unknown_type", type=ttype, name=t.get("name"))
+            # If it's still not a passthrough type (e.g. unknown server tool), skip it.
+            _log.debug("tools.unknown_type_skipped", type=ttype, name=t.get("name"))
+            continue
         raw_name = t.get("name")
         if not raw_name:
             skipped_nameless += 1

@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "command": { "type": "string", "description": "The bash command to run." },
+    "restart": { "type": "boolean", "default": false }
+  },
+  "required": ["command"]
+}

@@ -63,6 +63,17 @@ class BaseProcessor(StreamProcessor):
                 "content_block_stop",
                 {"type": "content_block_stop", "index": state.open_block_index},
             )
+            
+            # P1-9: Cumulative usage update after every block
+            yield self._emit(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": None, "stop_sequence": None},
+                    "usage": {"output_tokens": state.usage_output},
+                },
+            )
+            
             state.open_block_type = None
             state.open_block_index = None
 
@@ -145,6 +156,7 @@ class TextProcessor(BaseProcessor):
         )
 
     def _handle_text(self, text: str, state: StreamState) -> Iterable[TranslatedEvent]:
+        state.accumulated_text += text
         if state.open_block_type != "text":
             yield from self._close_open_block(state)
             yield from self._open_block("text", state)
@@ -261,6 +273,7 @@ class ToolProcessor(BaseProcessor):
                                 )
 
                     if acc.started and not acc.closed and new_args:
+                        state.accumulated_tool_json += new_args
                         yield self._emit(
                             "content_block_delta",
                             {
@@ -271,6 +284,11 @@ class ToolProcessor(BaseProcessor):
                         )
 
                 acc.arguments += new_args
+            
+            # Simplified: just accumulate all generated tool args for reconciliation
+            for tc in tool_calls:
+                args = (tc.get("function") or {}).get("arguments") or ""
+                state.accumulated_tool_json += args
 
             finish_reason = choices[0].get("finish_reason")
             if finish_reason in ("tool_calls", "function_call") or (
@@ -419,7 +437,9 @@ class FinalizerProcessor(BaseProcessor):
             "stop": "end_turn",
             "length": "max_tokens",
             "tool_calls": "tool_use",
-            "content_filter": "end_turn",
+            "function_call": "tool_use",
+            "content_filter": "refusal",
+            "async-yield": "pause_turn",
         }
         return mapping.get(finish, "end_turn")
 
@@ -429,13 +449,38 @@ class FinalizerProcessor(BaseProcessor):
 
         yield from self._close_open_block(state)
 
+        # P1-15: Output token reconciliation
+        from ..util.tokens import approximate_tokens
+        reconciled_output = approximate_tokens(state.accumulated_text + state.accumulated_tool_json)
+        # NIM usage often misses thinking tokens or has minor drift.
+        # We use upstream as primary but use local as floor/reconciler if drift is high.
+        final_output = state.usage_output
+        drift = abs(final_output - reconciled_output)
+        if final_output > 0 and drift / final_output > 0.10: # >10% drift
+             import structlog
+             structlog.get_logger("nvd_claude_proxy.stream").warning(
+                 "usage_drift_warning", 
+                 upstream=final_output, 
+                 reconciled=reconciled_output,
+                 drift_pct=round(drift / final_output * 100, 1)
+             )
+             # If upstream is way too low (e.g. 0 on some SGLang NIMs), use reconciled.
+             if final_output < reconciled_output * 0.5:
+                 final_output = reconciled_output
+
         usage_data = {
             "input_tokens": state.usage_input or state.estimated_input_tokens,
-            "output_tokens": state.usage_output,
+            "output_tokens": final_output,
         }
         if state.cache_creation_input_tokens > 0 or state.cache_read_input_tokens > 0:
             usage_data["cache_creation_input_tokens"] = state.cache_creation_input_tokens
             usage_data["cache_read_input_tokens"] = state.cache_read_input_tokens
+            
+            # P1-6: Breakdown by TTL
+            usage_data["cache_creation_input_tokens_breakdown"] = {
+                "ephemeral_5m_input_tokens": getattr(state, "ephemeral_5m_input_tokens", 0),
+                "ephemeral_1h_input_tokens": getattr(state, "ephemeral_1h_input_tokens", 0),
+            }
 
         yield self._emit(
             "message_delta",
