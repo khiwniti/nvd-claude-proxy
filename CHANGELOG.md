@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.0] — 2026-05-06
+
+### Added
+- **Stream TTFT Optimization** — The `message_start` event is now emitted immediately upon receiving the first byte from NVIDIA, significantly reducing the Time To First Token (TTFT) perceived by the SDK.
+- **Robust `<think>` Tag Parsing** — Added a holdback buffer to the stream translator to prevent partial `<think>` tags from leaking into the text stream.
+- **Retry Jitter & Backoff** — Enhanced `NvidiaClient` with randomized jitter and exponential backoff to handle upstream 429s more gracefully.
+
+### Changed
+- Refactored `stream_translator.py` into a cleaner state-machine architecture for better maintainability.
+
+---
+
 ## [1.1.11] — 2026-05-06
 
 ### Fixed
