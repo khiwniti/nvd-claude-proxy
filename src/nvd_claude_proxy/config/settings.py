@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     rate_limit_rpm: int = Field(0, alias="RATE_LIMIT_RPM")
     # Max request body size in megabytes.
     max_request_body_mb: float = Field(32.0, le=32.0, alias="MAX_REQUEST_BODY_MB")
+    # Use HTTP/2 to NVIDIA NIM upstream — better TLS amortisation and
+    # multiplexing for concurrent streams. Falls back to HTTP/1.1 if `h2`
+    # is unavailable. Disable if running behind an HTTP/1.1-only proxy.
+    upstream_http2: bool = Field(True, alias="UPSTREAM_HTTP2")
 
 
 @lru_cache

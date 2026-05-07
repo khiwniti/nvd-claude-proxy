@@ -55,6 +55,23 @@ _JSON_START_RE = re.compile(r"[{\[]")
 # Detect hallucinated tag-based tool calling in text deltas.
 _TAG_HALLUCINATION_RE = re.compile(r"(command-name>|command-arguments>)", re.IGNORECASE)
 
+# Tags that gate text↔thinking transitions when reasoning is exposed inline.
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+
+
+def _max_tag_prefix_suffix(s: str, tag: str) -> int:
+    """Return the largest k>0 such that s endswith tag[:k]; 0 if none.
+
+    Bounded by len(tag)-1 — we never hold back a complete tag (it would have
+    been matched by find()) nor more characters than could form one.
+    """
+    limit = min(len(s), len(tag) - 1)
+    for k in range(limit, 0, -1):
+        if s.endswith(tag[:k]):
+            return k
+    return 0
+
 # Claude Code internal tools that are always allowed.
 # These are NOT in the user's tool schemas but are legitimate Claude Code
 # tools that the model may call. We allow them through without validation.
@@ -199,6 +216,24 @@ class StreamTranslator:
     # To ensure contiguous Anthropic blocks, we only stream one tool at a time.
     _streaming_tool_openai_idx: int | None = None
 
+    # Carryover bytes from the previous text chunk that may form a partial
+    # <think>/</think> tag once the next chunk arrives. Bounded by
+    # len(tag)-1, so at most 7 chars are ever held back.
+    _text_holdback: str = ""
+    # True when the currently open thinking block was started by an upstream
+    # `reasoning_content` chunk (separate field) rather than an inline
+    # ``<think>`` tag inside ``delta.content``. Reasoning-content thinking
+    # is implicitly terminated by the arrival of any ``delta.content`` text.
+    _thinking_opened_by_reasoning: bool = False
+
+    # Cached verdict: True when the transformer chain is absent or has zero
+    # registered transformers, so per-emit dispatch can be skipped entirely.
+    _chain_inert: bool = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        chain = self.transformer_chain
+        self._chain_inert = chain is None or not getattr(chain, "transformers", None)
+
     # ── helpers ───────────────────────────────────────────────────────────
 
     def _emit(self, event: str, data: dict) -> Iterator[dict]:
@@ -207,13 +242,14 @@ class StreamTranslator:
             yield {"event": event, "data": data}
             return
 
-        if self.transformer_chain:
-            transformed_data = self.transformer_chain.transform_stream_chunk(data)
-            if transformed_data is None:
-                return
-            yield {"event": event, "data": transformed_data}
-        else:
+        if self._chain_inert:
             yield {"event": event, "data": data}
+            return
+
+        transformed_data = self.transformer_chain.transform_stream_chunk(data)  # type: ignore[union-attr]
+        if transformed_data is None:
+            return
+        yield {"event": event, "data": transformed_data}
 
     def _ensure_started(self) -> Iterator[dict]:
         if self._started:
@@ -313,6 +349,123 @@ class StreamTranslator:
                 },
             },
         )
+
+    # ── text/thinking emit helpers ────────────────────────────────────────
+
+    def _emit_text_delta(self, text: str) -> Iterator[dict]:
+        """Emit a text_delta, opening a text block lazily and stripping any
+        hallucinated tag-based tool call markers. May terminate the stream
+        on repeated hallucination — the caller MUST check self._finished.
+        """
+        if not text:
+            return
+
+        if _TAG_HALLUCINATION_RE.search(text):
+            self._hallucination_count += 1
+            text = _TAG_HALLUCINATION_RE.sub("[TAG STRIPPED]", text)
+            if self._hallucination_count >= self._MAX_HALLUCINATIONS:
+                if self._open_block_type != "text":
+                    yield from self._close_any_open()
+                    yield from self._open_text_block()
+                yield from self._emit(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": self._open_block_index,
+                        "delta": {
+                            "type": "text_delta",
+                            "text": (
+                                f"\n{text}\n[PROXY: Detected repeated malformed "
+                                "tag-based tool calls — stopping generation]\n"
+                            ),
+                        },
+                    },
+                )
+                yield from self._close_open_text_or_thinking()
+                self._stop_reason = "end_turn"
+                self._finished = True
+                return
+
+        if self._open_block_type != "text":
+            yield from self._close_any_open()
+            yield from self._open_text_block()
+        yield from self._emit(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": self._open_block_index,
+                "delta": {"type": "text_delta", "text": text},
+            },
+        )
+
+    def _emit_thinking_delta(self, text: str) -> Iterator[dict]:
+        """Emit a thinking_delta into the currently open thinking block."""
+        if not text:
+            return
+        yield from self._emit(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": self._open_block_index,
+                "delta": {"type": "thinking_delta", "thinking": text},
+            },
+        )
+
+    def _scan_text(self, incoming: str) -> Iterator[dict]:
+        """Stream text through a partial-tag-aware scanner.
+
+        Holds back the smallest tail of bytes that could be the prefix of
+        ``<think>`` or ``</think>`` until the next chunk resolves whether
+        it is a real tag or just literal text. This prevents fragments
+        like "<th" from rendering as visible text in the client UI.
+
+        If a thinking block is currently open *and* it was opened by an
+        upstream ``reasoning_content`` chunk (a separate field), the
+        arrival of ``delta.content`` text implicitly terminates it — the
+        OpenAI delta protocol does not interleave the two fields.
+        """
+        if self._open_block_type == "thinking" and self._thinking_opened_by_reasoning:
+            yield from self._close_any_open()
+            self._thinking_opened_by_reasoning = False
+
+        buf = self._text_holdback + incoming
+        self._text_holdback = ""
+        while buf:
+            if self._open_block_type == "thinking":
+                idx = buf.find(_THINK_CLOSE)
+                if idx >= 0:
+                    yield from self._emit_thinking_delta(buf[:idx])
+                    yield from self._close_any_open()
+                    buf = buf[idx + len(_THINK_CLOSE):]
+                    continue
+                keep = _max_tag_prefix_suffix(buf, _THINK_CLOSE)
+                if keep:
+                    if len(buf) > keep:
+                        yield from self._emit_thinking_delta(buf[:-keep])
+                    self._text_holdback = buf[-keep:]
+                    return
+                yield from self._emit_thinking_delta(buf)
+                return
+            else:
+                idx = buf.find(_THINK_OPEN)
+                if idx >= 0:
+                    if idx:
+                        yield from self._emit_text_delta(buf[:idx])
+                        if self._finished:
+                            return
+                    yield from self._close_any_open()
+                    yield from self._open_thinking_block()
+                    self._thinking_opened_by_reasoning = False
+                    buf = buf[idx + len(_THINK_OPEN):]
+                    continue
+                keep = _max_tag_prefix_suffix(buf, _THINK_OPEN)
+                if keep:
+                    if len(buf) > keep:
+                        yield from self._emit_text_delta(buf[:-keep])
+                    self._text_holdback = buf[-keep:]
+                    return
+                yield from self._emit_text_delta(buf)
+                return
 
     def _flush_tool(self, buf: ToolBuf, o_idx: int) -> Iterator[dict]:
         if not buf.openai_id or not buf.name:
@@ -485,6 +638,7 @@ class StreamTranslator:
             if self._open_block_type != "thinking":
                 yield from self._close_any_open()
                 yield from self._open_thinking_block()
+                self._thinking_opened_by_reasoning = True
             # Budget enforcement: chars / 4 ≈ tokens (conservative).
             if self.budget_tokens is not None:
                 remaining_chars = max(0, self.budget_tokens * 4 - self._thinking_chars)
@@ -518,137 +672,12 @@ class StreamTranslator:
                     },
                 )
 
-        # 2) Text chunk.
+        # 2) Text chunk — route through the holdback scanner so partial
+        # <think>/</think> tags split across chunks never leak as text.
         if text:
-            # Check for <think> tag start
-            if "<think>" in text:
-                parts = text.split("<think>", 1)
-                pre_think = parts[0]
-                post_think = parts[1]
-
-                if pre_think:
-                    if self._open_block_type != "text":
-                        yield from self._close_any_open()
-                        yield from self._open_text_block()
-                    yield from self._emit(
-                        "content_block_delta",
-                        {
-                            "type": "content_block_delta",
-                            "index": self._open_block_index,
-                            "delta": {"type": "text_delta", "text": pre_think},
-                        },
-                    )
-
-                yield from self._close_any_open()
-                yield from self._open_thinking_block()
-
-                if post_think:
-                    # Check for closing tag in the same chunk
-                    if "</think>" in post_think:
-                        think_parts = post_think.split("</think>", 1)
-                        inner_think = think_parts[0]
-                        after_think = think_parts[1]
-
-                        if inner_think:
-                            yield from self._emit(
-                                "content_block_delta",
-                                {
-                                    "type": "content_block_delta",
-                                    "index": self._open_block_index,
-                                    "delta": {"type": "thinking_delta", "thinking": inner_think},
-                                },
-                            )
-
-                        yield from self._close_any_open()
-                        if after_think:
-                            yield from self._open_text_block()
-                            yield from self._emit(
-                                "content_block_delta",
-                                {
-                                    "type": "content_block_delta",
-                                    "index": self._open_block_index,
-                                    "delta": {"type": "text_delta", "text": after_think},
-                                },
-                            )
-                    else:
-                        yield from self._emit(
-                            "content_block_delta",
-                            {
-                                "type": "content_block_delta",
-                                "index": self._open_block_index,
-                                "delta": {"type": "thinking_delta", "thinking": post_think},
-                            },
-                        )
+            yield from self._scan_text(text)
+            if self._finished:
                 return
-
-            # Check for </think> tag end (if currently in thinking block)
-            if self._open_block_type == "thinking" and "</think>" in text:
-                parts = text.split("</think>", 1)
-                inner_think = parts[0]
-                post_think = parts[1]
-
-                if inner_think:
-                    yield from self._emit(
-                        "content_block_delta",
-                        {
-                            "type": "content_block_delta",
-                            "index": self._open_block_index,
-                            "delta": {"type": "thinking_delta", "thinking": inner_think},
-                        },
-                    )
-
-                yield from self._close_any_open()
-                if post_think:
-                    yield from self._open_text_block()
-                    yield from self._emit(
-                        "content_block_delta",
-                        {
-                            "type": "content_block_delta",
-                            "index": self._open_block_index,
-                            "delta": {"type": "text_delta", "text": post_think},
-                        },
-                    )
-                return
-
-            if _TAG_HALLUCINATION_RE.search(text):
-                self._hallucination_count += 1
-                # Proactively strip the hallucinated tag to prevent client-side confusion
-                text = _TAG_HALLUCINATION_RE.sub("[TAG STRIPPED]", text)
-
-                if self._hallucination_count >= self._MAX_HALLUCINATIONS:
-                    if self._open_block_type != "text":
-                        yield from self._close_any_open()
-                        yield from self._open_text_block()
-                    yield from self._emit(
-                        "content_block_delta",
-                        {
-                            "type": "content_block_delta",
-                            "index": self._open_block_index,
-                            "delta": {
-                                "type": "text_delta",
-                                "text": (
-                                    f"\n{text}\n[PROXY: Detected repeated malformed "
-                                    "tag-based tool calls — stopping generation]\n"
-                                ),
-                            },
-                        },
-                    )
-                    yield from self._close_open_text_or_thinking()
-                    self._stop_reason = "end_turn"
-                    self._finished = True
-                    return
-
-            if self._open_block_type != "text":
-                yield from self._close_any_open()
-                yield from self._open_text_block()
-            yield from self._emit(
-                "content_block_delta",
-                {
-                    "type": "content_block_delta",
-                    "index": self._open_block_index,
-                    "delta": {"type": "text_delta", "text": text},
-                },
-            )
 
         # 3) Tool-call chunks.
         for tc in tool_calls:
@@ -777,6 +806,16 @@ class StreamTranslator:
         """Emit terminal `message_delta` + `message_stop`. Call once."""
         if self._finished:
             return
+        # Flush any residual text-holdback as plain text BEFORE marking
+        # finished, so _emit_text_delta can still open a text block. A
+        # stranded "<th" at EOF is just text, never a thinking block.
+        if self._text_holdback:
+            stranded = self._text_holdback
+            self._text_holdback = ""
+            if self._open_block_type == "thinking":
+                yield from self._emit_thinking_delta(stranded)
+            else:
+                yield from self._emit_text_delta(stranded)
         self._finished = True
         # Defensive: close anything still open.
         yield from self._close_any_open()

@@ -90,6 +90,30 @@ def _parse_beta_header(request: Request) -> list[str]:
     return [b.strip() for b in raw.split(",") if b.strip()]
 
 
+# Bounded fan-out for the live-monitor pubsub: a slow subscriber must never
+# delay a streamed token reaching the client. The semaphore caps in-flight
+# broadcast tasks so a stuck subscriber cannot leak unbounded tasks either.
+_PUBSUB_FANOUT_SEM = asyncio.Semaphore(64)
+
+
+def _fanout_pubsub(request: Request, payload: dict) -> None:
+    """Schedule a pubsub broadcast as a detached task; never await."""
+    pubsub = getattr(request.app.state, "pubsub", None)
+    if pubsub is None:
+        return
+
+    async def _go() -> None:
+        async with _PUBSUB_FANOUT_SEM:
+            try:
+                await pubsub.broadcast(payload)
+            except Exception as exc:  # noqa: BLE001
+                _log.debug("pubsub.drop", err=str(exc))
+
+    task = asyncio.create_task(_go())
+    # Prevent "Task was destroyed but it is pending!" warnings on shutdown.
+    task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
+
 def _echo_stop_sequence(anthropic_body: dict, resp: dict) -> None:
     """If the upstream stopped on text that matches a requested stop_sequence,
     set `stop_sequence` on the Anthropic response so SDKs can detect it.
@@ -180,7 +204,9 @@ async def messages(request: Request):
     betas = _parse_beta_header(request)
     from ..util.beta_negotiator import BetaNegotiator
 
-    negotiator = BetaNegotiator(betas)
+    # BetaNegotiator expects a set for set-difference operations; the parsed
+    # CSV header arrives as a list.
+    negotiator = BetaNegotiator(set(betas))
     try:
         negotiator.validate_request(body)
     except ValueError as exc:
@@ -321,9 +347,11 @@ async def messages(request: Request):
             headers=standard_response_headers(request_id),
         )
     stream = payload["stream"]
-    est_input_tokens = approximate_tokens(
-        {"messages": payload.get("messages", []), "tools": payload.get("tools", [])}
-    )
+    # `rough_input_tokens` (computed once at routing time) is the value
+    # exposed in `message_start.usage.input_tokens` per Anthropic spec.
+    # The earlier double-tokenisation here added 20-50ms of TTFT for zero
+    # observable benefit — output_tokens is always 0 at message_start.
+    est_input_tokens = rough_input_tokens
     betas = _parse_beta_header(request)
     user_id = (body.get("metadata") or {}).get("user_id")
 
@@ -477,10 +505,18 @@ async def messages(request: Request):
         """Multiplex upstream chunks with periodic ping events so SDKs never
         idle-timeout on a slow reasoning stream.
 
+        TTFT optimisation: emit a synthesised `message_start` SSE frame as
+        the very first wire byte — before the upstream POST is even
+        initiated. Anthropic's spec defines `message_start` as a synchronous
+        echo of the request envelope, so emitting it pre-flight is
+        spec-conformant and slashes perceived TTFT for the agent-state UI.
+
         Failover: if the first item from the upstream is a 5xx HTTPStatusError
         AND there is a next spec in the chain, we cancel that attempt and
         restart with the fallback model.  Once any non-error chunk has been
-        yielded we cannot failover (HTTP 200 headers are already sent).
+        yielded we cannot failover (HTTP 200 headers are already sent), but
+        `message_start` itself is identical across all chain members so
+        emitting it early is safe.
         """
         thinking_cfg = body.get("thinking") or {}
         budget_tokens = (
@@ -489,6 +525,31 @@ async def messages(request: Request):
         active_tool_id_map = tool_id_map
         active_payload = payload
         active_tool_controller = tool_controller
+
+        # Mint a stable message_id ONCE so the synthesised message_start and
+        # all subsequent events agree, even across failover attempts.
+        stable_message_id = new_request_id().replace("req_", "msg_")
+        synth_event_id = 1
+
+        # ── Phase A: synthesised message_start — FIRST WIRE BYTE ──────────
+        msg_start_payload = {
+            "type": "message_start",
+            "message": {
+                "id": stable_message_id,
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": requested_model,
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": est_input_tokens,
+                    "output_tokens": 0,
+                },
+            },
+        }
+        yield encode_sse("message_start", msg_start_payload, event_id=str(synth_event_id))
+        synth_event_id += 1
 
         try:
             for attempt_idx, try_spec in enumerate(spec_chain):
@@ -510,11 +571,15 @@ async def messages(request: Request):
                     )
 
                 state = StreamState(
-                    message_id=new_request_id().replace("req_", "msg_"),
+                    message_id=stable_message_id,
                     model_name=requested_model,
                     budget_tokens=budget_tokens,
                     estimated_input_tokens=est_input_tokens,
                 )
+                # Tell the pipeline that message_start has already been
+                # emitted on the wire so MetadataProcessor._ensure_started
+                # is a no-op for this stream.
+                state.started = True
                 if has_cache_control_markers(body):
                     acct = estimate_cache_tokens(body)
                     state.cache_creation_input_tokens = acct.cache_creation_input_tokens
@@ -555,14 +620,12 @@ async def messages(request: Request):
                 task = asyncio.create_task(pump())
                 ping_task = asyncio.create_task(_ping_scheduler())
                 try:
-                    event_id_counter = 1
-
                     def _encode_event(event_type: str, data: dict) -> bytes:
-                        nonlocal event_id_counter
+                        nonlocal synth_event_id
                         if event_type == "ping":
                             return encode_sse(event_type, data)
-                        ev_id = str(event_id_counter)
-                        event_id_counter += 1
+                        ev_id = str(synth_event_id)
+                        synth_event_id += 1
                         return encode_sse(event_type, data, event_id=ev_id)
 
                     # Peek at the first item to detect 5xx before any output.
@@ -613,23 +676,23 @@ async def messages(request: Request):
                     sentinel_seen = first_item is SENTINEL
                     if not sentinel_seen:
                         if isinstance(first_item, dict):
-                            if hasattr(request.app.state, "pubsub"):
-                                await request.app.state.pubsub.broadcast(
-                                    {
-                                        "type": "openai_chunk",
-                                        "payload": first_item,
-                                        "request_id": request_id,
-                                    }
-                                )
+                            _fanout_pubsub(
+                                request,
+                                {
+                                    "type": "openai_chunk",
+                                    "payload": first_item,
+                                    "request_id": request_id,
+                                },
+                            )
                             for ev in pipeline.feed(first_item):
-                                if hasattr(request.app.state, "pubsub"):
-                                    await request.app.state.pubsub.broadcast(
-                                        {
-                                            "type": "anthropic_event",
-                                            "payload": {"event": ev.event, "data": ev.data},
-                                            "request_id": request_id,
-                                        }
-                                    )
+                                _fanout_pubsub(
+                                    request,
+                                    {
+                                        "type": "anthropic_event",
+                                        "payload": {"event": ev.event, "data": ev.data},
+                                        "request_id": request_id,
+                                    },
+                                )
                                 yield _encode_event(ev.event, ev.data)
 
                     while not sentinel_seen:
@@ -678,31 +741,31 @@ async def messages(request: Request):
                                     "type": "error",
                                     "error": {"type": "api_error", "message": str(exc)},
                                 }
-                            if hasattr(request.app.state, "pubsub"):
-                                await request.app.state.pubsub.broadcast(
-                                    {"type": "error", "payload": anth, "request_id": request_id}
-                                )
+                            _fanout_pubsub(
+                                request,
+                                {"type": "error", "payload": anth, "request_id": request_id},
+                            )
                             yield _encode_event("error", anth)
                             return
                         else:
                             if isinstance(item, dict):
-                                if hasattr(request.app.state, "pubsub"):
-                                    await request.app.state.pubsub.broadcast(
-                                        {
-                                            "type": "openai_chunk",
-                                            "payload": item,
-                                            "request_id": request_id,
-                                        }
-                                    )
+                                _fanout_pubsub(
+                                    request,
+                                    {
+                                        "type": "openai_chunk",
+                                        "payload": item,
+                                        "request_id": request_id,
+                                    },
+                                )
                                 for ev in pipeline.feed(item):
-                                    if hasattr(request.app.state, "pubsub"):
-                                        await request.app.state.pubsub.broadcast(
-                                            {
-                                                "type": "anthropic_event",
-                                                "payload": {"event": ev.event, "data": ev.data},
-                                                "request_id": request_id,
-                                            }
-                                        )
+                                    _fanout_pubsub(
+                                        request,
+                                        {
+                                            "type": "anthropic_event",
+                                            "payload": {"event": ev.event, "data": ev.data},
+                                            "request_id": request_id,
+                                        },
+                                    )
                                     yield _encode_event(ev.event, ev.data)
 
                     # Finalize with double-close protection (port from claude-code-router)

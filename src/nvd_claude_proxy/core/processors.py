@@ -63,17 +63,9 @@ class BaseProcessor(StreamProcessor):
                 "content_block_stop",
                 {"type": "content_block_stop", "index": state.open_block_index},
             )
-            
-            # P1-9: Cumulative usage update after every block
-            yield self._emit(
-                "message_delta",
-                {
-                    "type": "message_delta",
-                    "delta": {"stop_reason": None, "stop_sequence": None},
-                    "usage": {"output_tokens": state.usage_output},
-                },
-            )
-            
+            # Per Anthropic spec, message_delta is emitted exactly once at end
+            # (in FinalizerProcessor.finalize). Per-block usage snapshots cause
+            # SDKs to over-render and cost trackers to double-count.
             state.open_block_type = None
             state.open_block_index = None
 

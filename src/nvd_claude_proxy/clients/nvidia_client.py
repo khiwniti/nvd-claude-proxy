@@ -25,15 +25,38 @@ class NvidiaClient:
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._client = httpx.AsyncClient(
+        # `read=None` lets long-running streaming responses hang on slow
+        # tokens without tripping httpx's timeout. The proxy's own ping
+        # cadence + pump task `finally` still bound truly stuck streams.
+        # Connect/write/pool timeouts remain finite.
+        client_kwargs: dict = dict(
             base_url=settings.nvidia_base_url,
-            timeout=httpx.Timeout(settings.request_timeout_seconds, connect=10.0),
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=None,
+                write=30.0,
+                pool=10.0,
+            ),
+            limits=httpx.Limits(
+                max_keepalive_connections=20,
+                max_connections=100,
+                keepalive_expiry=30.0,
+            ),
             headers={
                 "Authorization": f"Bearer {settings.nvidia_api_key}",
                 "Accept": "application/json",
                 "User-Agent": f"nvd-claude-proxy/{_version}",
             },
         )
+        if settings.upstream_http2:
+            try:
+                self._client = httpx.AsyncClient(http2=True, **client_kwargs)
+            except (ImportError, RuntimeError) as exc:
+                # `h2` not installed — fall back transparently to HTTP/1.1
+                _log.warning("nvidia.http2_unavailable", err=str(exc))
+                self._client = httpx.AsyncClient(**client_kwargs)
+        else:
+            self._client = httpx.AsyncClient(**client_kwargs)
 
     async def aclose(self) -> None:
         await self._client.aclose()
