@@ -5,9 +5,8 @@ import signal
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from ._version import __version__
 from .clients.nvidia_client import NvidiaClient
@@ -16,7 +15,7 @@ from .config.settings import get_settings
 from .middleware.body_limit import BodyLimitMiddleware
 from .middleware.logging import LoggingMiddleware
 from .middleware.rate_limiter import DistributedRateLimiterMiddleware
-from .routes import count_tokens, dashboard, health, messages, metrics_route, models, stubs, openapi
+from .routes import count_tokens, health, messages, metrics_route, models, stubs, openapi
 from .services.storage.factory import create_storage_engine
 
 _log = structlog.get_logger("nvd_claude_proxy.app")
@@ -36,32 +35,6 @@ try:
 except ImportError:
     _HAS_SECURITY_MIDDLEWARE = False
     _log.warning("Security middleware not available - install all dependencies")
-
-
-class PubSub:
-    """Simple PubSub manager for real-time monitoring events via WebSockets."""
-
-    def __init__(self) -> None:
-        self.subscribers: list[WebSocket] = []
-
-    async def subscribe(self, websocket: WebSocket) -> None:
-        await websocket.accept()
-        self.subscribers.append(websocket)
-        _log.debug("pubsub.subscribed", count=len(self.subscribers))
-
-    def unsubscribe(self, websocket: WebSocket) -> None:
-        if websocket in self.subscribers:
-            self.subscribers.remove(websocket)
-            _log.debug("pubsub.unsubscribed", count=len(self.subscribers))
-
-    async def broadcast(self, message: dict) -> None:
-        if not self.subscribers:
-            return
-        for subscriber in list(self.subscribers):
-            try:
-                await subscriber.send_json(message)
-            except Exception:
-                self.unsubscribe(subscriber)
 
 
 def _configure_logging(level: str) -> None:
@@ -129,11 +102,10 @@ def create_app() -> FastAPI:
     )
     app.state.settings = settings
     app.state.model_registry = load_model_registry(settings.model_config_path)
-    
+
     from .config.server_tools import load_server_tool_registry
     app.state.server_tool_registry = load_server_tool_registry()
-    
-    app.state.pubsub = PubSub()
+
     _install_sighup_handler(app)
 
     # Middleware Pipeline (Outermost -> Innermost)
@@ -166,19 +138,11 @@ def create_app() -> FastAPI:
 
     # Routes
     app.include_router(messages.router)
-    app.include_router(dashboard.router)
     app.include_router(count_tokens.router)
     app.include_router(models.router)
     app.include_router(health.router)
     app.include_router(metrics_route.router)
     app.include_router(stubs.router)
     app.include_router(openapi.router)
-
-    # Static Assets
-    from pathlib import Path
-
-    static_dir = Path(__file__).parent / "static"
-    if static_dir.exists():
-        app.mount("/dashboard", StaticFiles(directory=str(static_dir), html=True), name="static")
 
     return app

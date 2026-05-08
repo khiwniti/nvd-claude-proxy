@@ -90,30 +90,6 @@ def _parse_beta_header(request: Request) -> list[str]:
     return [b.strip() for b in raw.split(",") if b.strip()]
 
 
-# Bounded fan-out for the live-monitor pubsub: a slow subscriber must never
-# delay a streamed token reaching the client. The semaphore caps in-flight
-# broadcast tasks so a stuck subscriber cannot leak unbounded tasks either.
-_PUBSUB_FANOUT_SEM = asyncio.Semaphore(64)
-
-
-def _fanout_pubsub(request: Request, payload: dict) -> None:
-    """Schedule a pubsub broadcast as a detached task; never await."""
-    pubsub = getattr(request.app.state, "pubsub", None)
-    if pubsub is None:
-        return
-
-    async def _go() -> None:
-        async with _PUBSUB_FANOUT_SEM:
-            try:
-                await pubsub.broadcast(payload)
-            except Exception as exc:  # noqa: BLE001
-                _log.debug("pubsub.drop", err=str(exc))
-
-    task = asyncio.create_task(_go())
-    # Prevent "Task was destroyed but it is pending!" warnings on shutdown.
-    task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-
-
 def _echo_stop_sequence(anthropic_body: dict, resp: dict) -> None:
     """If the upstream stopped on text that matches a requested stop_sequence,
     set `stop_sequence` on the Anthropic response so SDKs can detect it.
@@ -252,20 +228,6 @@ async def messages(request: Request):
 
     registry = request.app.state.model_registry
 
-    def on_fix(fix_type: str, payload: Any) -> None:
-        """Broadcast transformer fixes to the live monitor."""
-        if hasattr(request.app.state, "pubsub"):
-            asyncio.create_task(
-                request.app.state.pubsub.broadcast(
-                    {
-                        "type": "transformer_fix",
-                        "fix_type": fix_type,
-                        "payload": payload,
-                        "request_id": request_id,
-                    }
-                )
-            )
-
     # Phase 3: Scenario-based routing (port from claude-code-router)
     # Estimate tokens of the Anthropic request body to inform routing.
     rough_input_tokens = approximate_tokens(body)
@@ -313,7 +275,7 @@ async def messages(request: Request):
     session_obj = getattr(request.state, "session", None)
     tool_id_map = await SessionService.get_isolated_tool_id_map(request, session_obj)
     transformer_chain = await SessionService.get_isolated_transformer_chain(
-        request, session_obj, spec, _build_transformer_chain, on_fix=on_fix
+        request, session_obj, spec, _build_transformer_chain, on_fix=None
     )
 
     # Pass tool schemas so the controller can perform deterministic arg validation.
@@ -676,23 +638,7 @@ async def messages(request: Request):
                     sentinel_seen = first_item is SENTINEL
                     if not sentinel_seen:
                         if isinstance(first_item, dict):
-                            _fanout_pubsub(
-                                request,
-                                {
-                                    "type": "openai_chunk",
-                                    "payload": first_item,
-                                    "request_id": request_id,
-                                },
-                            )
                             for ev in pipeline.feed(first_item):
-                                _fanout_pubsub(
-                                    request,
-                                    {
-                                        "type": "anthropic_event",
-                                        "payload": {"event": ev.event, "data": ev.data},
-                                        "request_id": request_id,
-                                    },
-                                )
                                 yield _encode_event(ev.event, ev.data)
 
                     while not sentinel_seen:
@@ -741,31 +687,11 @@ async def messages(request: Request):
                                     "type": "error",
                                     "error": {"type": "api_error", "message": str(exc)},
                                 }
-                            _fanout_pubsub(
-                                request,
-                                {"type": "error", "payload": anth, "request_id": request_id},
-                            )
                             yield _encode_event("error", anth)
                             return
                         else:
                             if isinstance(item, dict):
-                                _fanout_pubsub(
-                                    request,
-                                    {
-                                        "type": "openai_chunk",
-                                        "payload": item,
-                                        "request_id": request_id,
-                                    },
-                                )
                                 for ev in pipeline.feed(item):
-                                    _fanout_pubsub(
-                                        request,
-                                        {
-                                            "type": "anthropic_event",
-                                            "payload": {"event": ev.event, "data": ev.data},
-                                            "request_id": request_id,
-                                        },
-                                    )
                                     yield _encode_event(ev.event, ev.data)
 
                     # Finalize with double-close protection (port from claude-code-router)

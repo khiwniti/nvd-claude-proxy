@@ -5,6 +5,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [1.2.0] — 2026-05-08
+
+### Honest scoping
+
+NVIDIA NIM containers now expose a **native Anthropic-compatible `/v1/messages` endpoint** ([official guide](https://docs.nvidia.com/nim/large-language-models/latest/ai-assistant-integrations/claude-code.html)). For self-hosted NIM users, this proxy is unnecessary — point Claude Code at NIM directly. The README now leads with that path; the proxy is positioned as the residual translation shim for NVIDIA's hosted OpenAI-compatible endpoint (`integrate.api.nvidia.com`).
+
+### Removed
+
+- **Dashboard / live-monitor pubsub** — Deleted `routes/dashboard.py`, the `/dashboard` static mount, the `PubSub` WebSocket manager in `app.py`, and all in-stream `_fanout_pubsub` broadcasts (5 hot-path call sites). Removes ~250 LOC and one source of streaming overhead. Operators wanting observability should use the `/metrics` Prometheus endpoint and structured JSON logs.
+
+### Fixed (carried over from the streaming-fidelity remediation)
+
+- **TTFT** — `message_start` is now the first wire byte. Synthesised pre-flight from the request envelope per Anthropic spec, before the upstream NIM POST is initiated. Eliminates the dead-air period that left Claude Code's agent-state UI blank.
+- **Partial `<think>` tag splitting** — New holdback scanner in `StreamTranslator` holds back at most 7 chars of trailing text that could form the prefix of `<think>` / `</think>`. Fragments like `"<th"` or `"</thi"` no longer leak as visible `text_delta`.
+- **Singleton `message_delta`** — Removed the per-block-close cumulative `message_delta` emission in `core/processors.py`. Matches Anthropic spec (`message_delta` exactly once at end).
+- **Inert transformer-chain fast path** — Cached the "no transformers" verdict in `StreamTranslator.__post_init__`, skipping per-event chain dispatch in the common case.
+- **HTTP/2 + streaming-friendly timeouts** — `httpx[http2]` dependency, `read=None` for streaming reads, `UPSTREAM_HTTP2` env knob with graceful fallback.
+- **`BetaNegotiator` type bug** — Fixed list/set mismatch that 500'd any request carrying an `anthropic-beta` header.
+
+### Tests
+
+- `tests/unit/test_think_tag_holdback.py` — 6 cases including 1-byte chunking, EOF flush, reasoning→content transition.
+- `tests/unit/test_message_start_ttft.py` — first-frame structural assertion under hung upstream.
+
+---
+
 ## [1.1.11] — 2026-05-06
 
 ### Fixed
