@@ -448,11 +448,24 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         presented = request.headers.get("x-api-key")
+        auth_source = "x-api-key" if presented else None
+
+        if not presented:
+            presented = request.headers.get("api-key")
+            if presented:
+                auth_source = "api-key"
+
+        if not presented:
+            presented = request.headers.get("x-claude-api-key")
+            if presented:
+                auth_source = "x-claude-api-key"
+
         if not presented:
             auth = request.headers.get("authorization", "")
             if auth.lower().startswith("bearer "):
                 presented = auth[7:].strip()
-        
+                auth_source = "authorization-bearer"
+
         if presented:
             presented = presented.strip()
 
@@ -466,6 +479,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 "auth.failed",
                 path=request.url.path,
                 client_ip=_get_client_ip(request),
+                auth_source=auth_source or "none",
             )
             return ORJSONResponse(
                 {

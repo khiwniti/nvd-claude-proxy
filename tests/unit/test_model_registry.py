@@ -8,6 +8,20 @@ def test_exact_alias(model_registry):
     assert spec.reasoning.style == "qwen-kwargs"
 
 
+def test_sonnet_alias_uses_verified_nemotron_super(model_registry):
+    spec = model_registry.resolve("claude-sonnet-4-6")
+    assert spec.nvidia_id == "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+    assert spec.supports_tools is True
+    assert spec.reasoning.style == "detailed-thinking-v1"
+
+
+def test_haiku_alias_uses_verified_nemotron_nano(model_registry):
+    spec = model_registry.resolve("claude-haiku-4-5")
+    assert spec.nvidia_id == "nvidia/nemotron-3-nano-30b-a3b"
+    assert spec.supports_tools is True
+    assert spec.reasoning.style == "slash-think"
+
+
 def test_qwen3_coder_fallback_alias(model_registry):
     spec = model_registry.resolve("claude-qwen3-coder")
     assert spec.nvidia_id == "qwen/qwen3-coder-480b-a35b-instruct"

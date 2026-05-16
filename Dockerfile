@@ -15,7 +15,8 @@ RUN pip install --no-cache-dir .
 
 ENV PYTHONPATH=/app/src \
     PROXY_HOST=0.0.0.0 \
-    PROXY_PORT=8788
+    PROXY_PORT=8788 \
+    MODEL_CONFIG_PATH=/app/config/models.yaml
 
 EXPOSE 8788
 CMD ["sh", "-c", "PROXY_PORT=${PORT:-${PROXY_PORT:-8788}} python -m nvd_claude_proxy.main"]

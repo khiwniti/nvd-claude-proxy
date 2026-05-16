@@ -12,9 +12,12 @@ from __future__ import annotations
 import pytest
 import time
 
+from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 from starlette.testclient import TestClient
 
 from nvd_claude_proxy.middleware.security import (
+    AuthMiddleware,
     is_url_blocked,
     extract_urls_from_body,
 )
@@ -498,8 +501,36 @@ class TestCircuitBreakerRegistry:
 # ── Integration Tests ─────────────────────────────────────────────────────────
 
 
+def _app_with_proxy_auth(proxy_api_key: str = "test-key") -> FastAPI:
+    app = FastAPI()
+    app.add_middleware(AuthMiddleware)
+    app.state.settings = type("Settings", (), {"proxy_api_key": proxy_api_key})()
+
+    @app.get("/v1/models")
+    async def models():
+        return PlainTextResponse("ok")
+
+    return app
+
+
 class TestSecurityMiddlewareIntegration:
     """Test security middleware with the full app."""
+
+    def test_auth_accepts_api_key_header(self):
+        client = TestClient(_app_with_proxy_auth())
+        response = client.get("/v1/models", headers={"api-key": "test-key"})
+        assert response.status_code == 200
+
+    def test_auth_accepts_x_claude_api_key_header(self):
+        client = TestClient(_app_with_proxy_auth())
+        response = client.get("/v1/models", headers={"x-claude-api-key": "test-key"})
+        assert response.status_code == 200
+
+    def test_auth_rejects_missing_header(self):
+        client = TestClient(_app_with_proxy_auth())
+        response = client.get("/v1/models")
+        assert response.status_code == 401
+        assert response.json()["error"]["message"] == "invalid proxy api key"
 
     def test_security_headers_present(self):
         """Security headers should be present in responses."""
